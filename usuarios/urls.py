@@ -24,7 +24,8 @@ urlpatterns = [
     path('dashboard/profesor/horarios/', views.horarios_profesor, name='horarios_profesor'),
     path('dashboard/profesor/acreditacion/', views.acreditacion, name='acreditacion'),
     path('dashboard/profesor/asistencia/', views.registro_asistencia, name='registro_asistencia'),
-    path('dashboard/profesor/reservar-aula/', views.reservar_aula, name='reservar_aula'),
+    path('dashboard/profesor/reservar-aula/', views.horarios_reserva, name='reservar_aula'),
+    path('dashboard/profesor/cancelar-reserva/', views.cancelar_reserva, name='cancelar_reserva'),
     path('dashboard/profesor/subida-notas/', views.subida_notas, name='subida_notas'),
 
     path('dashboard/secretaria/', views.dashboard_secretaria, name='dashboard_secretaria'), 

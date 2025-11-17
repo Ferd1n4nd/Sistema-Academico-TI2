@@ -1,0 +1,9 @@
+myenv/
+__pycache__/
+*.pyc
+*.pyd
+db.sqlite3
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
