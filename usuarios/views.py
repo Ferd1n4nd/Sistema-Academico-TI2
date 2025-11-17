@@ -9,7 +9,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from .models import Perfil, Estudiante, Profesor
 from cursos.models import Curso, BloqueHorario, GrupoTeoria, GrupoLaboratorio, GrupoCurso
 from matriculas.models import Matricula, MatriculaLaboratorio
-from reservas.models import Aula
+from reservas.models import Aula, Reserva
 from asistencias.models import RegistroAsistencia, RegistroAsistenciaDetalle
 import math
 from django.utils import timezone
@@ -1342,6 +1342,393 @@ def registro_asistencia(request):
         'historial_fechas': historial_fechas,
     }
     return render(request, 'usuarios/profesor/registro_asistencia.html', contexto)
+
+def obtener_bloques_recurrentes_ocupados(request, aula_id_a_filtrar=None):
+    profesor_obj, response = check_professor_auth(request)
+    if response: return response
+    aula_queryset = BloqueHorario.objects
+    if aula_id_a_filtrar:
+        aula_queryset = aula_queryset.filter(aula__id=aula_id_a_filtrar)
+
+    ocupaciones_aula = aula_queryset.values(
+        'dia',
+        'horaInicio',
+        'horaFin',
+        'aula__id'
+    ).distinct()
+
+    profesor_id = profesor_obj.perfil.id
+    ocupaciones_profesor = BloqueHorario.objects.filter(
+        grupo_curso__profesor__perfil__id=profesor_id
+    ).values(
+        'dia',
+        'horaInicio',
+        'horaFin',
+        'aula__id'
+    ).distinct()
+
+    bloques_ocupados_profesor = list(ocupaciones_profesor)
+    bloques_ocupados_aula = list(ocupaciones_aula)
+
+    return{
+        'ocupaciones_aula': bloques_ocupados_aula,
+        'ocupaciones_profesor': bloques_ocupados_profesor,
+        'aulas_existentes': list(Aula.objects.values('id','tipo'))
+    }
+
+def horarios_reserva (request):
+    profesor_obj, response = check_professor_auth(request)
+    if response: return response
+
+    COLOR_DISPONIBLE = 'bg-success-subtle'
+    COLOR_AULA_OCUPADA = 'bg-danger'
+    COLOR_PROFESOR_OCUPADO = 'bg-warning-soft'
+    COLOR_MI_RESERVA = 'tw-bg-blue-600 tw-text-white'
+    DIAS_MAP = {
+        'LUNES': 'Lunes', 'MARTES': 'Martes', 'MIERCOLES': 'Miercoles', 'JUEVES': 'Jueves', 'VIERNES': 'Viernes'
+    }
+
+    #calculo rango 2 semanas
+    hoy=date.today()
+    weekday_hoy = hoy.weekday()
+    if weekday_hoy >= 5: # Si es Sábado o Domingo
+        # Empezar desde el PRÓXIMO Lunes
+        dias_para_lunes = 7 - weekday_hoy
+        inicio_semana = hoy + timedelta(days=dias_para_lunes)
+    else:
+        # Empezar desde el Lunes de ESTA semana
+        dias_hasta_lunes = weekday_hoy
+        inicio_semana = hoy - timedelta(days=dias_hasta_lunes)
+    fin_periodo = inicio_semana + timedelta(weeks=2)
+
+    dias_a_mostrar: list[date] = []
+    fecha_actual = inicio_semana
+    while fecha_actual < fin_periodo:
+        if fecha_actual.weekday() < 5:
+            dias_a_mostrar.append(fecha_actual)
+        fecha_actual+=timedelta(days=1)
+    fin_periodo = dias_a_mostrar[-1] if dias_a_mostrar else hoy
+
+    aula_id_a_filtrar = request.GET.get('aula_id')
+    if not aula_id_a_filtrar:
+        aula_id_a_filtrar='101'
+    
+    if not aula_id_a_filtrar:
+        reservas_existentes=[]
+    else:
+        reservas_existentes = Reserva.objects.filter(
+            aula__id=aula_id_a_filtrar,
+            fecha_reserva__gte=inicio_semana,
+            fecha_reserva__lte=fin_periodo
+        ).select_related('aula','profesor')
+
+    bloques_ocupados = obtener_bloques_recurrentes_ocupados(request, aula_id_a_filtrar)
+    ocupaciones_aulas = bloques_ocupados['ocupaciones_aula']
+    ocupaciones_profesor = bloques_ocupados['ocupaciones_profesor']
+    aulas_existentes = bloques_ocupados['aulas_existentes']
+
+    DIAS_MAP_WEEKDAY = {
+        0: 'LUNES', 1: 'MARTES', 2: 'MIERCOLES', 3: 'JUEVES', 4: 'VIERNES', 5: 'SABADO', 6: 'DOMINGO'
+    }
+
+    if request.method == 'POST':
+        # 1. Obtener datos manuales del formulario
+        aula_id_post = request.POST.get('aula_id')
+        fecha_str = request.POST.get('fecha')
+        hora_inicio_str = request.POST.get('hora_inicio')
+        hora_fin_str = request.POST.get('hora_fin')
+        
+        # 2. Validación de campos obligatorios
+        if not all([aula_id_post, fecha_str, hora_inicio_str, hora_fin_str]):
+            messages.error(request, "Datos incompletos. Se requiere Aula, Fecha, Hora Inicio y Hora Fin.")
+            return redirect(request.path + f'?aula_id={aula_id_post}' if aula_id_post else request.path)
+
+        try:
+            # 3. Conversión de datos
+            fecha_reserva = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+            hora_inicio = datetime.strptime(hora_inicio_str, '%H:%M').time()
+            hora_fin = datetime.strptime(hora_fin_str, '%H:%M').time()
+            
+            # Validar que la hora de inicio sea menor que la hora de fin
+            if hora_inicio >= hora_fin:
+                messages.error(request, "La hora de inicio debe ser anterior a la hora de fin.")
+                return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            aula = Aula.objects.get(id=aula_id_post)
+            
+            if fecha_reserva.weekday() >= 5: # 5 = Sábado, 6 = Domingo, REGLA 1 NO SABADO NI DOMINGO
+                messages.error(request, "Error: No se pueden realizar reservas en fines de semana (Sábado o Domingo).")
+                return redirect(request.path + f'?aula_id={aula_id_post}')
+            
+            dia_semana_clave = DIAS_MAP_WEEKDAY[fecha_reserva.weekday()]
+
+            # Regla 2: No Fechas Pasadas
+            if fecha_reserva < date.today():
+                messages.error(request, "Error: No se pueden realizar reservas en fechas pasadas.")
+                return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # Regla 3: Máximo 2 reservas por semana
+            # Calcular el Lunes de la semana de la reserva
+            inicio_semana_reserva = fecha_reserva - timedelta(days=fecha_reserva.weekday())
+            # Calcular el Domingo de esa semana
+            fin_semana_reserva = inicio_semana_reserva + timedelta(days=6)
+            
+            conteo_reservas_semana = Reserva.objects.filter(
+                profesor=profesor_obj,
+                fecha_reserva__gte=inicio_semana_reserva,
+                fecha_reserva__lte=fin_semana_reserva
+            ).count()
+            
+            if conteo_reservas_semana >= 2:
+                messages.error(request, f"Error: Ya ha alcanzado el límite de {conteo_reservas_semana} reservas para la semana del {inicio_semana_reserva.strftime('%d/%m')}.")
+                return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # 4. Validación de Superposiciones
+            
+            # 4a. Ocupaciones Fijas del Aula (Recurrente)
+            # Necesitamos obtener los bloques recurrentes para la validación
+            bloques_ocupados_val = obtener_bloques_recurrentes_ocupados(request, aula_id_post)
+            dia_semana_clave = list(DIAS_MAP.keys())[fecha_reserva.weekday()]
+            
+            for bloque in bloques_ocupados_val['ocupaciones_aula']:
+                if bloque['dia'] == dia_semana_clave:
+                    # (InicioBloque < FinReserva) Y (FinBloque > InicioReserva)
+                    if (bloque['horaInicio'] < hora_fin and bloque['horaFin'] > hora_inicio):
+                        messages.error(request, f"Conflicto: El aula {aula_id_post} tiene una clase fija recurrente en ese horario.")
+                        return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # 4b. Ocupaciones Fijas del Profesor (Recurrente)
+            for bloque in bloques_ocupados_val['ocupaciones_profesor']:
+                 if bloque['dia'] == dia_semana_clave:
+                    if (bloque['horaInicio'] < hora_fin and bloque['horaFin'] > hora_inicio):
+                        messages.error(request, f"Conflicto: Usted tiene una clase fija recurrente en ese horario (en aula {bloque.get('aula__id', 'otra')}).")
+                        return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # 4c. Reservas Existentes del Aula (Puntual)
+            reservas_aula_superpuestas = Reserva.objects.filter(
+                aula=aula,
+                fecha_reserva=fecha_reserva,
+                hora_inicio__lt=hora_fin, # Inicio existente < Fin nueva
+                hora_fin__gt=hora_inicio  # Fin existente > Inicio nueva
+            ).exists()
+            
+            if reservas_aula_superpuestas:
+                messages.error(request, f"Conflicto: Ya existe otra reserva puntual para el aula {aula_id_post} en ese periodo.")
+                return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # 4d. Reservas Existentes del Profesor (Puntual)
+            reservas_profesor_superpuestas = Reserva.objects.filter(
+                profesor=profesor_obj,
+                fecha_reserva=fecha_reserva,
+                hora_inicio__lt=hora_fin, 
+                hora_fin__gt=hora_inicio 
+            ).exists()
+
+            if reservas_profesor_superpuestas:
+                  messages.error(request, f"Conflicto: Usted ya tiene otra reserva puntual en ese periodo en otra aula.")
+                  return redirect(request.path + f'?aula_id={aula_id_post}')
+
+            # 5. Guardar la Reserva
+            Reserva.objects.create(
+                aula=aula,
+                profesor=profesor_obj,
+                fecha_reserva=fecha_reserva,
+                hora_inicio=hora_inicio,
+                hora_fin=hora_fin
+            )
+            messages.success(request, f"Reserva del aula {aula_id_post} para el {fecha_str} de {hora_inicio_str} a {hora_fin_str} creada con éxito.")
+            return redirect(request.path + f'?aula_id={aula_id_post}')
+
+        except Aula.DoesNotExist:
+             messages.error(request, "El ID del Aula ingresado no existe.")
+             return redirect(request.path + f'?aula_id={aula_id_post}')
+        except Exception as e:
+             messages.error(request, f"Error al procesar la reserva: {e}")
+             return redirect(request.path + f'?aula_id={aula_id_post}')
+
+    # --- FIN LÓGICA POST ---
+
+
+    puntos_corte = set()
+    puntos_corte.add(time(20,10)) #HORA FIJA FIN
+    puntos_corte.add(time(7,0))
+    for bloque in ocupaciones_aulas:
+        puntos_corte.add(bloque['horaInicio'])
+        puntos_corte.add(bloque['horaFin'])
+    for bloque in ocupaciones_profesor:
+        puntos_corte.add(bloque['horaInicio'])
+        puntos_corte.add(bloque['horaFin'])
+    for bloque in reservas_existentes:
+        puntos_corte.add(bloque.hora_inicio.replace(second=0, microsecond=0))
+        puntos_corte.add(bloque.hora_fin.replace(second=0, microsecond=0))
+
+    dummy_date = date.today()
+    puntos_corte_dt = sorted(list(set([datetime.combine(dummy_date, t) for t in puntos_corte])))
+
+    #Mapeo de recurrencias pa acceso rápido
+    mapa_rec_aula = {d: [] for d in DIAS_MAP.keys()}
+    for bloque in ocupaciones_aulas:
+        mapa_rec_aula[bloque['dia']].append(bloque)
+        
+    mapa_rec_profesor = {d: [] for d in DIAS_MAP.keys()}
+    for bloque in ocupaciones_profesor:
+        mapa_rec_profesor[bloque['dia']].append(bloque)
+
+    horario_consolidado = []
+    hora_actual = None
+
+    for dt_siguiente in puntos_corte_dt:
+        if hora_actual is None:
+            hora_actual = dt_siguiente
+            continue
+        dt_inicio_fila = hora_actual
+        dt_fin_fila = dt_siguiente
+        if dt_inicio_fila >= dt_fin_fila:
+            hora_actual = dt_siguiente
+            continue
+        
+        hora_inicio_time = dt_inicio_fila.time()
+        hora_fin_time = dt_fin_fila.time()
+        rango_hora_str = f"{hora_inicio_time.strftime('%H:%M')} - {hora_fin_time.strftime('%H:%M')}"
+        fila_data = []
+        hay_clase_en_fila = False
+
+        for fecha_especifica in dias_a_mostrar:
+            dia_semana_str = list(DIAS_MAP.keys())[fecha_especifica.weekday()]
+            estado_celda = {
+                'tipo': 'LIBRE', 
+                'color': COLOR_DISPONIBLE, 
+                'texto': 'Disponible para Reservar',
+                'fecha': fecha_especifica.strftime('%Y-%m-%d'),
+                'horaInicio': dt_inicio_fila.strftime('%H:%M'), 
+                'horaFin': dt_fin_fila.strftime('%H:%M'),
+                'data_reserva': f"{fecha_especifica.strftime('%Y-%m-%d')}|{dt_inicio_fila.strftime('%H:%M')}|{dt_fin_fila.strftime('%H:%M')}",
+            }
+
+            for reserva in reservas_existentes:
+                if reserva.fecha_reserva==fecha_especifica:
+                    r_inicio_time = reserva.hora_inicio.replace(second=0, microsecond=0)
+                    r_fin_time = reserva.hora_fin.replace(second=0, microsecond=0)
+
+                    if (r_inicio_time <= hora_inicio_time and r_fin_time > hora_inicio_time) or \
+                       (r_inicio_time < hora_fin_time and r_fin_time >= hora_fin_time) or \
+                       (r_inicio_time >= hora_inicio_time and r_fin_time <= hora_fin_time):
+                        
+                        hay_clase_en_fila = True
+                        if reserva.profesor.perfil.id == profesor_obj.perfil.id:
+                            estado_celda.update({
+                                'tipo': 'MI RESERVA',
+                                'color': COLOR_MI_RESERVA,
+                                'texto': "Mi Reserva",
+                                'data_reserva': None,
+                            })
+                        else:
+                            estado_celda.update({
+                                'tipo': 'AULA_RESERVA', 
+                                'color': COLOR_AULA_OCUPADA, 
+                                'texto': f"Reservado ({reserva.profesor.perfil.nombre})",
+                                'data_reserva': None,
+                            })
+                        break
+                
+            if estado_celda['tipo'] == 'LIBRE': 
+                bloques_aula_rec = mapa_rec_aula.get(dia_semana_str, [])
+                for bloque in bloques_aula_rec:
+                    if (bloque['horaInicio'] <= hora_inicio_time and bloque['horaFin'] > hora_inicio_time) or \
+                       (bloque['horaInicio'] < hora_fin_time and bloque['horaFin'] >= hora_fin_time) or \
+                       (bloque['horaInicio'] >= hora_inicio_time and bloque['horaFin'] <= hora_fin_time):
+                    
+                        estado_celda.update({
+                            'tipo': 'AULA_FIJA', 
+                            'color': COLOR_AULA_OCUPADA, 
+                            'texto': "Aula Ocupada (Clase Fija)",
+                            'data_reserva': None,
+                        })
+                        break
+                
+            if estado_celda['tipo'] == 'LIBRE':
+                bloques_prof_rec = mapa_rec_profesor.get(dia_semana_str,[])
+                for bloque in bloques_prof_rec:
+                    if (bloque['horaInicio'] <= hora_inicio_time and bloque['horaFin'] > hora_inicio_time) or \
+                       (bloque['horaInicio'] < hora_fin_time and bloque['horaFin'] >= hora_fin_time) or \
+                       (bloque['horaInicio'] >= hora_inicio_time and bloque['horaFin'] <= hora_fin_time):
+
+                        estado_celda.update({
+                         'tipo': 'PROFESOR_FIJO', 
+                         'color': COLOR_PROFESOR_OCUPADO, 
+                         'texto': f"Profesor Ocupado (Otra Clase en {bloque.get('aula__id', 'otra aula')})",
+                         'data_reserva': None,
+                        })
+                        break
+                
+            if estado_celda['tipo'] != 'LIBRE':
+                hay_clase_en_fila=True
+            fila_data.append(estado_celda)
+        
+        if not hay_clase_en_fila and horario_consolidado and horario_consolidado[-1]['tipo']=='LIBRE':
+            fila_anterior = horario_consolidado[-1]
+            fila_anterior['rango'] = f"{fila_anterior['rango'].split(' - ')[0]} - {hora_fin_time.strftime('%H:%M')}"
+            for celda in fila_anterior['data']:
+                if celda['data_reserva']: # Si es reservable (LIBRE/PROFESOR_FIJO)
+                    # El data_reserva es FECHA|HORA_INICIO|HORA_FIN. Actualizamos el HORA_FIN.
+                    parts = celda['data_reserva'].split('|')
+                    celda['data_reserva'] = f"{parts[0]}|{parts[1]}|{dt_fin_fila.strftime('%H:%M')}"
+        else:
+            horario_consolidado.append({
+                'rango': rango_hora_str,
+                'data': fila_data, # Contiene el estado de los 10 días
+                'tipo': 'CLASE' if hay_clase_en_fila else 'LIBRE',
+            })
+        hora_actual = dt_siguiente
+    dias_para_encabezado = [f"{DIAS_MAP[list(DIAS_MAP.keys())[d.weekday()]]} {d.strftime('%d/%m')}" for d in dias_a_mostrar]
+
+    mis_reservas_recientes = Reserva.objects.filter(
+        profesor=profesor_obj,
+        fecha_reserva__gte=date.today()
+    ).order_by('fecha_reserva', 'hora_inicio').select_related('aula')
+
+    return render(request, 'usuarios/profesor/reservar_aula.html',{
+        'dias_a_mostrar': dias_para_encabezado,
+        'horario_consolidado': horario_consolidado,
+        'aula_actual_id': aula_id_a_filtrar,
+        'aulas_existentes': aulas_existentes,
+        'mis_reservas_recientes': mis_reservas_recientes,
+    })
+
+def cancelar_reserva(request):
+    profesor_obj, response = check_professor_auth(request)
+    if response: return response
+    if request.method != 'POST':
+        messages.error(request, "Método no permitido.")
+        return redirect('usuarios:reservar_aula') # Redirige a la pág principal de reservas
+
+    try:
+        reserva_id = request.POST.get('reserva_id')
+        profesor_obj, _ = check_professor_auth(request) # Verifica que el profesor esté logueado
+
+        if not reserva_id or not profesor_obj:
+            messages.error(request, "Datos incompletos para la cancelación.")
+            return redirect(request.META.get('HTTP_REFERER', 'usuarios:reservar_aula'))
+
+        # 4. Validación de Seguridad CRÍTICA:
+        # Asegurarse de que la reserva existe Y le pertenece al profesor logueado.
+        reserva_a_borrar = Reserva.objects.get(
+            id=reserva_id,
+            profesor=profesor_obj 
+        )
+        
+        # 5. Borrado
+        reserva_a_borrar.delete()
+        messages.success(request, "Reserva cancelada exitosamente.")
+
+    except Reserva.DoesNotExist:
+        messages.error(request, "No se pudo encontrar la reserva o no tienes permiso para cancelarla.")
+    except Exception as e:
+        messages.error(request, f"Ocurrió un error: {e}")
+
+    # Redirigir a la página anterior (que usualmente es la de reservar_aula)
+    return redirect(request.META.get('HTTP_REFERER', 'usuarios:reservar_aula'))
+
 
 def reservar_aula(request):
     profesor_obj, response = check_professor_auth(request)

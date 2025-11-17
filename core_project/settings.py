@@ -82,9 +82,9 @@ WSGI_APPLICATION = 'core_project.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'sistemaAcademico',
+        'NAME': 'sistemaacademico',
         'USER': 'root',
-        'PASSWORD': 'ferdinand1909',
+        'PASSWORD': 'castelo123',
         'HOST': 'localhost',
         'PORT': '3306',
         'OPTIONS': {
