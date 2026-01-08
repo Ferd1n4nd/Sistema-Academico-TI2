@@ -1,0 +1,277 @@
+{% extends "usuarios/admin/base_admin.html" %}
+{% load humanize custom_filters %}
+
+{% block content %}
+
+<div class="card shadow rounded-4 border-0">
+  <div class="card-body p-4">
+
+    <!-- ENCABEZADO -->
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h3 class="fw-bold mb-1 text-primary">{{ profesor.perfil.nombre }}</h3>
+        <div class="text-muted small">
+            ID: <strong>{{ profesor.perfil.id }}</strong> — Email: {{ profesor.perfil.email|default:"-" }}
+        </div>
+        <span class="badge mt-2 px-3 py-2 {% if profesor.perfil.estadoCuenta %}bg-success{% else %}bg-danger{% endif %}">
+            {% if profesor.perfil.estadoCuenta %}Activo{% else %}Inactivo{% endif %}
+        </span>
+      </div>
+
+      <div class="text-end">
+        <a class="btn btn-outline-primary" 
+           href="{% url 'usuarios:registro_profesores_admin' %}">
+          <i class="bi bi-arrow-left"></i> Volver
+        </a>
+      </div>
+    </div>
+
+    <hr>
+
+    <!-- INFORMACIÓN BÁSICA -->
+    <h6 class="text-uppercase small text-secondary fw-bold">Información básica</h6>
+    <div class="row g-4 mb-3">
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>Nombre</strong>
+          <div class="text-muted">{{ profesor.perfil.nombre }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>ID</strong>
+          <div class="text-muted">{{ profesor.perfil.id }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>Email</strong>
+          <div class="text-muted">{{ profesor.perfil.email|default:"-" }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CURSOS ASIGNADOS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Cursos asignados</h6>
+
+    {% if grupos %}
+      <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-hover align-middle small">
+          <thead class="table-primary text-dark">
+            <tr>
+              <th>Curso</th>
+              <th>Grupo</th>
+              <th>Tipo</th>
+              <th>Horarios</th>
+              <th>Sílabo</th>
+              <th>Temas</th>
+            </tr>
+          </thead>
+          <tbody>
+
+          {% for g in grupos %}
+            <tr>
+              <td>{{ g.curso.id }} — {{ g.curso.nombre }}</td>
+              <td class="text-center">{{ g.grupo }}</td>
+
+              <td>
+                {% if g.id in grupos_teoria_ids %}
+                    <span class="badge bg-info">Teoría</span>
+                {% else %}
+                    <span class="badge bg-warning text-dark">Laboratorio</span>
+                {% endif %}
+              </td>
+
+              <!-- HORARIOS -->
+              <td>
+                <button class="btn btn-outline-info btn-sm"
+                        data-bs-toggle="modal"
+                        data-bs-target="#horariosModal{{ g.id }}">
+                    Ver horarios
+                </button>
+
+                <div class="modal fade" id="horariosModal{{ g.id }}">
+                  <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content rounded-4">
+
+                      <div class="modal-header bg-info text-white">
+                        <h5 class="modal-title">Horarios — {{ g.curso.nombre }}</h5>
+                        <button class="btn-close" data-bs-dismiss="modal"></button>
+                      </div>
+
+                      <div class="modal-body">
+                        {% if horarios|get_item:g.id %}
+                          {% for h in horarios|get_item:g.id %}
+                            <div class="p-2 mb-2 border rounded">
+                              <strong>{{ h.dia }}</strong><br>
+                              {{ h.horaInicio }} — {{ h.horaFin }}<br>
+                              Aula: {{ h.aula }}
+                            </div>
+                          {% endfor %}
+                        {% else %}
+                          <p class="text-muted">Sin horarios registrados.</p>
+                        {% endif %}
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+
+              </td>
+
+              <!-- SÍLABO -->
+              <td>
+                {% if g.curso.silabo_url %}
+                  <a href="{{ g.curso.silabo_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
+                    Ver sílabo
+                  </a>
+                {% else %}
+                  <span class="text-muted">No subido</span>
+                {% endif %}
+              </td>
+
+              <!-- TEMAS -->
+              <td>
+                {% if g.id in grupos_teoria_ids %}
+                <button class="btn btn-outline-secondary btn-sm"
+                        data-bs-toggle="modal"
+                        data-bs-target="#temasModal{{ g.id }}">
+                    Ver temas
+                </button>
+
+                <!-- MODAL TEMAS -->
+                <div class="modal fade" id="temasModal{{ g.id }}">
+                  <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content rounded-4 shadow">
+
+                      <div class="modal-header bg-secondary text-white">
+                        <h5 class="modal-title">Temas — {{ g.curso.nombre }}</h5>
+                        <button class="btn-close" data-bs-dismiss="modal"></button>
+                      </div>
+
+                      <div class="modal-body">
+                        {% if temas|get_item:g.id %}
+                          {% for t in temas|get_item:g.id %}
+                            <div class="p-2 mb-2 border rounded">
+                              <strong>{{ t.orden }}. {{ t.nombre }}</strong><br>
+                              Fecha: {{ t.fecha }}<br>
+                              {% if t.completado %}
+                                <span class="badge bg-success">Completado</span>
+                              {% else %}
+                                <span class="badge bg-warning text-dark">Pendiente</span>
+                              {% endif %}
+                            </div>
+                          {% endfor %}
+                        {% else %}
+                          <p class="text-muted">Sin temas registrados.</p>
+                        {% endif %}
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+                {% else %}
+                  <span class="text-muted">Solo teoría</span>
+                {% endif %}
+              </td>
+
+            </tr>
+          {% endfor %}
+
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-warning small mt-2">No tiene cursos asignados.</div>
+    {% endif %}
+
+    <!-- RESERVAS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Reservas realizadas</h6>
+
+    {% if reservas %}
+      <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-sm table-hover align-middle small">
+          <thead class="table-info">
+            <tr>
+              <th>Fecha</th>
+              <th>Inicio</th>
+              <th>Fin</th>
+              <th>Aula</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in reservas %}
+              <tr>
+                <td>{{ r.fecha_reserva }}</td>
+                <td>{{ r.hora_inicio }}</td>
+                <td>{{ r.hora_fin }}</td>
+                <td>{{ r.aula_id }} ({{ r.aula_tipo }})</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-secondary small">No hay reservas registradas.</div>
+    {% endif %}
+
+    <!-- ASISTENCIAS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Asistencias tomadas</h6>
+
+    {% if asistencias %}
+      <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-sm align-middle small">
+          <thead class="table-light">
+            <tr>
+              <th>Fecha</th>
+              <th>Inicio ventana</th>
+              <th>Grupo</th>
+              <th>Curso</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in asistencias %}
+            <tr>
+              <td>{{ a.fechaClase }}</td>
+              <td>{{ a.horaInicioVentana }}</td>
+              <td>{{ a.grupo_curso.id }}</td>
+              <td>{{ a.grupo_curso.curso.nombre }}</td>
+              <td>{{ a.ipProfesor }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-secondary small">No se han tomado asistencias.</div>
+    {% endif %}
+
+    <!-- RESUMEN FINAL -->
+    <div class="row mt-4 g-3">
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Total Cursos</h6>
+          <div class="fs-2 fw-bold text-primary">{{ resumen.total_cursos }}</div>
+        </div>
+      </div>
+
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Reservas</h6>
+          <div class="fs-2 fw-bold text-info">{{ resumen.total_reservas }}</div>
+        </div>
+      </div>
+
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Asistencias tomadas</h6>
+          <div class="fs-2 fw-bold text-success">{{ resumen.total_asistencias }}</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

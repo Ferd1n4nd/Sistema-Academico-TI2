@@ -82,6 +82,8 @@ def login_usuario(request, rol_seleccionado):
                 return redirect('usuarios:dashboard_profesor')
             if usuario_perfil.rol == 'SECRETARIA':
                 return redirect('usuarios:dashboard_secretaria')
+            if usuario_perfil.rol == 'ADMIN':
+                return redirect('usuarios:dashboard_admin')
 
         except Perfil.DoesNotExist:
             messages.error(request, f"Credenciales inválidas para el rol de {rol_upper}.")
@@ -496,6 +498,9 @@ def mis_cursos(request):
         grupo_teoria = mat_teoria.grupo_curso # Este es un objeto GrupoCurso
         curso = grupo_teoria.curso
         
+        # Verificar si el curso tiene sílabo subido
+        tiene_silabo = bool(curso.silabo_url)
+
         # Intentamos obtener la info del laboratorio usando el mapa
         mat_lab = matriculas_lab_map.get(curso.id)
         
@@ -537,7 +542,10 @@ def mis_cursos(request):
             'profesor_lab': grupo_lab_info['profesor'],
             'grupo_lab_id': grupo_lab_info['id'], 
             'temas': temas_del_curso, 
-            'collapse_id': f'temas-{curso.id}' 
+            'collapse_id': f'temas-{curso.id}',
+            'tiene_silabo': tiene_silabo,
+            'silabo_url': curso.silabo_url if tiene_silabo else None,
+            'collapse_silabo_id': f'silabo-{curso.id}'  # <-- NUEVO: ID para el collapse del sílabo
         })
 
     # ----------------------------------------------------------------------
@@ -2850,26 +2858,236 @@ def check_secretaria_auth(request):
 
 def dashboard_secretaria(request):
     """Muestra la página de inicio del dashboard de Secretaría."""
-    perfil_obj, response = check_secretaria_auth(request)
+    secretaria_obj, response = check_secretaria_auth(request)
     if response:
         return response
     
-    # Datos de ejemplo para el dashboard
+    from django.db.models import Count, Q, Sum, Avg
+    from django.utils import timezone
+    from datetime import date, timedelta
+    
+    # =============================================
+    # 1. CONTEOS BÁSICOS
+    # =============================================
     conteo_profesores = Profesor.objects.count()
     conteo_estudiantes = Estudiante.objects.count()
+    conteo_cursos = Curso.objects.count()
+    conteo_aulas = Aula.objects.count()
+    
+    # =============================================
+    # 2. ESTADÍSTICAS DE MATRÍCULAS
+    # =============================================
+    # Total de matrículas activas (estado=True)
+    total_matriculas = Matricula.objects.filter(estado=True).count()
+    
+    # Matrículas por tipo (Teoría vs Laboratorio)
+    matriculas_teoria = Matricula.objects.filter(
+        estado=True,
+        grupo_curso__grupoteoria__isnull=False
+    ).count()
+    
+    matriculas_lab = MatriculaLaboratorio.objects.count()
+    
+    # =============================================
+    # 3. ESTADÍSTICAS DE HORARIOS
+    # =============================================
+    # Total de bloques de horario asignados
+    total_bloques = BloqueHorario.objects.count()
+    
+    # Bloques por tipo de aula
+    bloques_aula_normal = BloqueHorario.objects.filter(
+        aula__tipo='AULA_NORMAL'
+    ).count()
+    
+    bloques_laboratorio = BloqueHorario.objects.filter(
+        aula__tipo='LABORATORIO'
+    ).count()
+    
+    # =============================================
+    # 4. ESTADÍSTICAS DE RESERVAS (semana actual: Lunes a Viernes)
+    # =============================================
+    hoy = date.today()
+    
+    # Calcular el lunes de la semana actual (0=Lunes, 6=Domingo)
+    dias_hasta_lunes = hoy.weekday()  # 0 para lunes, 1 para martes, etc.
+    lunes_semana_actual = hoy - timedelta(days=dias_hasta_lunes)
+    
+    # Calcular el viernes de esta semana
+    dias_hasta_viernes = 4 - hoy.weekday()  # 0 si es viernes, positivo si es antes
+    if dias_hasta_viernes < 0:
+        # Si ya pasó el viernes, ir al viernes de la siguiente semana
+        dias_hasta_viernes += 7
+    viernes_semana_actual = hoy + timedelta(days=dias_hasta_viernes)
+    
+    # Para estadísticas de "Actividad Reciente", usamos desde el lunes de esta semana
+    # hasta el viernes de esta semana
+    fecha_inicio_semana = lunes_semana_actual
+    fecha_fin_semana = viernes_semana_actual
+    
+    reservas_semana = Reserva.objects.filter(
+        fecha_reserva__range=[fecha_inicio_semana, fecha_fin_semana]
+    ).count()
+    
+    # Reservas para hoy
+    reservas_hoy = Reserva.objects.filter(fecha_reserva=hoy).count()
+    
+    # =============================================
+    # 5. ESTADÍSTICAS DE ASISTENCIA (semana actual: Lunes a Viernes)
+    # =============================================
+    asistencia_semana = RegistroAsistencia.objects.filter(
+        fechaClase__range=[fecha_inicio_semana, fecha_fin_semana]
+    ).count()
+    
+    # Porcentaje promedio de asistencia
+    if asistencia_semana > 0:
+        total_estudiantes_asistencia = RegistroAsistenciaDetalle.objects.filter(
+            registro_asistencia__fechaClase__range=[fecha_inicio_semana, fecha_fin_semana]
+        ).count()
+        
+        presentes = RegistroAsistenciaDetalle.objects.filter(
+            registro_asistencia__fechaClase__range=[fecha_inicio_semana, fecha_fin_semana],
+            estado='PRESENTE'
+        ).count()
+        
+        porcentaje_asistencia = (presentes / total_estudiantes_asistencia * 100) if total_estudiantes_asistencia > 0 else 0
+    else:
+        porcentaje_asistencia = 0
+    
+    # =============================================
+    # 6. INFORMACIÓN DE GRUPOS ACTIVOS
+    # =============================================
+    # Grupos con profesor asignado
+    grupos_con_profesor = GrupoCurso.objects.filter(profesor__isnull=False).count()
+    grupos_sin_profesor = GrupoCurso.objects.filter(profesor__isnull=True).count()
+    
+    # Distribución por tipo de grupo
+    grupos_teoria = GrupoTeoria.objects.count()
+    grupos_laboratorio = GrupoLaboratorio.objects.count()
+    
+    # =============================================
+    # 7. TOP 5 CURSOS CON MÁS MATRÍCULAS
+    # =============================================
+    top_cursos = Curso.objects.annotate(
+        total_matriculas=Count('grupocurso__matricula', filter=Q(grupocurso__matricula__estado=True))
+    ).order_by('-total_matriculas')[:5]
+    
+    # =============================================
+    # 8. AULAS MÁS UTILIZADAS
+    # =============================================
+    aulas_populares = Aula.objects.annotate(
+        total_bloques=Count('bloquehorario')
+    ).order_by('-total_bloques')[:5]
+    
+    # =============================================
+    # 9. PROFESORES MÁS ACTIVOS (por cantidad de grupos)
+    # =============================================
+    profesores_activos = Profesor.objects.annotate(
+        total_grupos=Count('grupocurso')
+    ).order_by('-total_grupos')[:5]
+
+    cantidad_profesores_con_grupos = Profesor.objects.annotate(
+        total_grupos=Count('grupocurso')
+    ).filter(total_grupos__gt=0).count()
     
     contexto = {
-        'perfil': perfil_obj,
-        'titulo': 'Inicio - Panel Secretaría',
+        'perfil': secretaria_obj.perfil,
+        'titulo': 'Panel de Control - Secretaría',
+        
+        # Conteos básicos
         'conteo_profesores': conteo_profesores,
         'conteo_estudiantes': conteo_estudiantes,
+        'conteo_cursos': conteo_cursos,
+        'conteo_aulas': conteo_aulas,
+        
+        # Matrículas
+        'total_matriculas': total_matriculas,
+        'matriculas_teoria': matriculas_teoria,
+        'matriculas_lab': matriculas_lab,
+        
+        # Horarios
+        'total_bloques': total_bloques,
+        'bloques_aula_normal': bloques_aula_normal,
+        'bloques_laboratorio': bloques_laboratorio,
+        
+        # Reservas
+        'reservas_semana': reservas_semana,
+        'reservas_hoy': reservas_hoy,
+        
+        # Asistencia
+        'asistencia_semana': asistencia_semana,
+        'porcentaje_asistencia': round(porcentaje_asistencia, 1),
+        
+        # Grupos
+        'grupos_con_profesor': grupos_con_profesor,
+        'grupos_sin_profesor': grupos_sin_profesor,
+        'grupos_teoria': grupos_teoria,
+        'grupos_laboratorio': grupos_laboratorio,
+        
+        # Listados
+        'top_cursos': top_cursos,
+        'aulas_populares': aulas_populares,
+        'profesores_activos': profesores_activos,
+        'profesores_grupos_asignados': cantidad_profesores_con_grupos,
+        
+        # Fechas para referencia - Ahora muestra "Lunes Actual - Viernes Actual"
+        'hoy': hoy.strftime('%d/%m/%Y'),
+        'semana_pasada': fecha_inicio_semana.strftime('%d/%m/%Y'),  # Lunes de esta semana
+        'viernes_semana': fecha_fin_semana.strftime('%d/%m/%Y'),    # Viernes de esta semana
     }
+    
     return render(request, 'usuarios/secretaria/dashboard_secretaria.html', contexto)
 
 def mi_cuenta_secretaria(request):
-    perfil_obj, response = check_secretaria_auth(request)
-    if response: return response
-    contexto = {'perfil': perfil_obj, 'titulo': 'Mi Cuenta'}
+    # Autenticación
+    secretaria_obj, response = check_secretaria_auth(request)
+    if response: 
+        return response
+
+    perfil = secretaria_obj.perfil
+
+    # -----------------------------
+    # POST: cambio de contraseña
+    # -----------------------------
+    if request.method == 'POST':
+        old_password = request.POST.get('old_password')
+        new_password1 = request.POST.get('new_password1')
+        new_password2 = request.POST.get('new_password2')
+
+        # 1. Validar contraseña actual
+        if old_password != perfil.password:
+            messages.error(request, 'La contraseña actual ingresada es incorrecta.')
+            return redirect('usuarios:mi_cuenta_secretaria')
+
+        # 2. Validar nueva contraseña
+        if new_password1 != new_password2:
+            messages.error(request, 'La nueva contraseña y su confirmación no coinciden.')
+            return redirect('usuarios:mi_cuenta_secretaria')
+
+        if len(new_password1) < 6:
+            messages.error(request, 'La nueva contraseña debe tener al menos 6 caracteres.')
+            return redirect('usuarios:mi_cuenta_secretaria')
+
+        if new_password1 == old_password:
+            messages.warning(request, 'La nueva contraseña no puede ser igual a la anterior.')
+            return redirect('usuarios:mi_cuenta_secretaria')
+
+        # 3. Guardar
+        try:
+            perfil.password = new_password1
+            perfil.save()
+            messages.success(request, '¡Contraseña actualizada correctamente!')
+        except Exception as e:
+            messages.error(request, f'Error al guardar la nueva contraseña: {e}')
+
+        return redirect('usuarios:mi_cuenta_secretaria')
+
+    # -----------------------------
+    # GET: mostrar página
+    # -----------------------------
+    contexto = {
+        'perfil': perfil,
+        'titulo': 'Mi Cuenta'
+    }
     return render(request, 'usuarios/secretaria/mi_cuenta_secretaria.html', contexto)
 
 def gestion_cursos(request):
@@ -2959,17 +3177,56 @@ def gestion_cursos(request):
                     curso.porcentajeEC3 = request.POST.get('porcentajeEC3') or 0
                     curso.porcentajeEP3 = request.POST.get('porcentajeEP3') or 0
                     
-                    # Lógica para eliminar archivos si se marcaron los checkboxes
-                    if request.POST.get('eliminar_silabo') == '1': curso.silabo_url = None
-                    if request.POST.get('eliminar_fase1alta') == '1': curso.Fase1notaAlta_url = None
-                    if request.POST.get('eliminar_fase1media') == '1': curso.Fase1notaMedia_url = None
-                    if request.POST.get('eliminar_fase1baja') == '1': curso.Fase1notaBaja_url = None
-                    if request.POST.get('eliminar_fase2alta') == '1': curso.Fase2notaAlta_url = None
-                    if request.POST.get('eliminar_fase2media') == '1': curso.Fase2notaMedia_url = None
-                    if request.POST.get('eliminar_fase2baja') == '1': curso.Fase2notaBaja_url = None
-                    if request.POST.get('eliminar_fase3alta') == '1': curso.Fase3notaAlta_url = None
-                    if request.POST.get('eliminar_fase3media') == '1': curso.Fase3notaMedia_url = None
-                    if request.POST.get('eliminar_fase3baja') == '1': curso.Fase3notaBaja_url = None
+                    # Lógica para manejar archivos subidos (AGREGAR ESTO)
+                    # 1. Sílabo
+                    if 'silabo' in request.FILES:
+                        curso.silabo_url = request.FILES['silabo']
+                    
+                    # 2. Archivos de Fase 1
+                    if 'fase1alta' in request.FILES:
+                        curso.Fase1notaAlta_url = request.FILES['fase1alta']
+                    if 'fase1media' in request.FILES:
+                        curso.Fase1notaMedia_url = request.FILES['fase1media']
+                    if 'fase1baja' in request.FILES:
+                        curso.Fase1notaBaja_url = request.FILES['fase1baja']
+                    
+                    # 3. Archivos de Fase 2
+                    if 'fase2alta' in request.FILES:
+                        curso.Fase2notaAlta_url = request.FILES['fase2alta']
+                    if 'fase2media' in request.FILES:
+                        curso.Fase2notaMedia_url = request.FILES['fase2media']
+                    if 'fase2baja' in request.FILES:
+                        curso.Fase2notaBaja_url = request.FILES['fase2baja']
+                    
+                    # 4. Archivos de Fase 3
+                    if 'fase3alta' in request.FILES:
+                        curso.Fase3notaAlta_url = request.FILES['fase3alta']
+                    if 'fase3media' in request.FILES:
+                        curso.Fase3notaMedia_url = request.FILES['fase3media']
+                    if 'fase3baja' in request.FILES:
+                        curso.Fase3notaBaja_url = request.FILES['fase3baja']
+                    
+                    # Lógica para eliminar archivos si se marcaron los checkboxes (MANTENER ESTO)
+                    if request.POST.get('eliminar_silabo') == '1': 
+                        curso.silabo_url = None
+                    if request.POST.get('eliminar_fase1alta') == '1': 
+                        curso.Fase1notaAlta_url = None
+                    if request.POST.get('eliminar_fase1media') == '1': 
+                        curso.Fase1notaMedia_url = None
+                    if request.POST.get('eliminar_fase1baja') == '1': 
+                        curso.Fase1notaBaja_url = None
+                    if request.POST.get('eliminar_fase2alta') == '1': 
+                        curso.Fase2notaAlta_url = None
+                    if request.POST.get('eliminar_fase2media') == '1': 
+                        curso.Fase2notaMedia_url = None
+                    if request.POST.get('eliminar_fase2baja') == '1': 
+                        curso.Fase2notaBaja_url = None
+                    if request.POST.get('eliminar_fase3alta') == '1': 
+                        curso.Fase3notaAlta_url = None
+                    if request.POST.get('eliminar_fase3media') == '1': 
+                        curso.Fase3notaMedia_url = None
+                    if request.POST.get('eliminar_fase3baja') == '1': 
+                        curso.Fase3notaBaja_url = None
                     
                     curso.save()
                     messages.success(request, "Información del curso actualizada.")
@@ -4295,7 +4552,7 @@ def registro_estudiantes(request):
                     defaults={
                         "nombre": nombre,
                         "email": email,
-                        "password": password,   # SIN HASH según tu modelo
+                        "password": password,
                         "rol": "ESTUDIANTE",
                         "estadoCuenta": True
                     }
@@ -4452,7 +4709,6 @@ def registro_estudiantes(request):
         "grupos": grupos,
     }
     return render(request, "usuarios/secretaria/registro_estudiantes.html", context)
-
 
 def detalle_estudiante(request):
     perfil_obj, response = check_secretaria_auth(request)
@@ -4815,12 +5071,25 @@ def registro_profesores(request):
     #   EDITAR PROFESOR
     # ===========================
     if request.method == "POST" and "editar_profesor" in request.POST:
-
         profesor_id = request.POST.get("profesor_id")
         nombre = request.POST.get("nombre")
         email = request.POST.get("email")
         estado = request.POST.get("estadoCuenta")
         asignar_grupo_id = request.POST.get("grupo_curso_id")
+        tipo_clase = request.POST.get("tipo_clase")
+
+        profe = Profesor.objects.get(perfil__id=profesor_id)
+        if tipo_clase == "ambos":
+            profe.es_teoria = True
+            profe.es_lab = True
+        elif tipo_clase == "teoria":
+            profe.es_teoria = True
+            profe.es_lab = False
+        elif tipo_clase == "laboratorio":
+            profe.es_teoria = False
+            profe.es_lab = True
+        
+        profe.save()
 
         perfil = Perfil.objects.get(id=profesor_id)
 
@@ -4831,7 +5100,7 @@ def registro_profesores(request):
 
         if asignar_grupo_id:
             grupo = GrupoCurso.objects.get(id=asignar_grupo_id)
-            grupo.profesor = profesor_id
+            grupo.profesor = profe
             grupo.save()
 
         messages.success(request, "Profesor actualizado correctamente.")
@@ -4892,3 +5161,2486 @@ def check_administrador_auth(request):
     except Administrador.DoesNotExist:
         messages.error(request, "Error: Datos de secretaria no encontrados.")
         return None, redirect('usuarios:logout')
+    
+def dashboard_admin(request):
+    """Muestra la página de inicio del dashboard de Administrador."""
+    admin_obj, response = check_administrador_auth(request)
+    if response:
+        return response
+    
+    from django.db.models import Count, Q, Sum, Avg
+    from django.utils import timezone
+    from datetime import date, timedelta
+    
+    # =============================================
+    # 1. CONTEOS BÁSICOS
+    # =============================================
+    conteo_profesores = Profesor.objects.count()
+    conteo_estudiantes = Estudiante.objects.count()
+    conteo_secretarias = Secretaria.objects.count()
+    conteo_cursos = Curso.objects.count()
+    conteo_aulas = Aula.objects.count()
+    
+    # =============================================
+    # 2. ESTADÍSTICAS DE MATRÍCULAS
+    # =============================================
+    # Total de matrículas activas (estado=True)
+    total_matriculas = Matricula.objects.filter(estado=True).count()
+    
+    # Matrículas por tipo (Teoría vs Laboratorio)
+    matriculas_teoria = Matricula.objects.filter(
+        estado=True,
+        grupo_curso__grupoteoria__isnull=False
+    ).count()
+    
+    matriculas_lab = MatriculaLaboratorio.objects.count()
+    
+    # =============================================
+    # 3. ESTADÍSTICAS DE HORARIOS
+    # =============================================
+    # Total de bloques de horario asignados
+    total_bloques = BloqueHorario.objects.count()
+    
+    # Bloques por tipo de aula
+    bloques_aula_normal = BloqueHorario.objects.filter(
+        aula__tipo='AULA_NORMAL'
+    ).count()
+    
+    bloques_laboratorio = BloqueHorario.objects.filter(
+        aula__tipo='LABORATORIO'
+    ).count()
+    
+    # =============================================
+    # 4. ESTADÍSTICAS DE RESERVAS (semana actual: Lunes a Viernes)
+    # =============================================
+    hoy = date.today()
+    
+    # Calcular el lunes de la semana actual (0=Lunes, 6=Domingo)
+    dias_hasta_lunes = hoy.weekday()  # 0 para lunes, 1 para martes, etc.
+    lunes_semana_actual = hoy - timedelta(days=dias_hasta_lunes)
+    
+    # Calcular el viernes de esta semana
+    dias_hasta_viernes = 4 - hoy.weekday()  # 0 si es viernes, positivo si es antes
+    if dias_hasta_viernes < 0:
+        # Si ya pasó el viernes, ir al viernes de la siguiente semana
+        dias_hasta_viernes += 7
+    viernes_semana_actual = hoy + timedelta(days=dias_hasta_viernes)
+    
+    # Para estadísticas de "Actividad Reciente", usamos desde el lunes de esta semana
+    # hasta el viernes de esta semana
+    fecha_inicio_semana = lunes_semana_actual
+    fecha_fin_semana = viernes_semana_actual
+    
+    reservas_semana = Reserva.objects.filter(
+        fecha_reserva__range=[fecha_inicio_semana, fecha_fin_semana]
+    ).count()
+    
+    # Reservas para hoy
+    reservas_hoy = Reserva.objects.filter(fecha_reserva=hoy).count()
+    
+    # =============================================
+    # 5. ESTADÍSTICAS DE ASISTENCIA (semana actual: Lunes a Viernes)
+    # =============================================
+    asistencia_semana = RegistroAsistencia.objects.filter(
+        fechaClase__range=[fecha_inicio_semana, fecha_fin_semana]
+    ).count()
+    
+    # Porcentaje promedio de asistencia
+    if asistencia_semana > 0:
+        total_estudiantes_asistencia = RegistroAsistenciaDetalle.objects.filter(
+            registro_asistencia__fechaClase__range=[fecha_inicio_semana, fecha_fin_semana]
+        ).count()
+        
+        presentes = RegistroAsistenciaDetalle.objects.filter(
+            registro_asistencia__fechaClase__range=[fecha_inicio_semana, fecha_fin_semana],
+            estado='PRESENTE'
+        ).count()
+        
+        porcentaje_asistencia = (presentes / total_estudiantes_asistencia * 100) if total_estudiantes_asistencia > 0 else 0
+    else:
+        porcentaje_asistencia = 0
+    
+    # =============================================
+    # 6. INFORMACIÓN DE GRUPOS ACTIVOS
+    # =============================================
+    # Grupos con profesor asignado
+    grupos_con_profesor = GrupoCurso.objects.filter(profesor__isnull=False).count()
+    grupos_sin_profesor = GrupoCurso.objects.filter(profesor__isnull=True).count()
+    
+    # Distribución por tipo de grupo
+    grupos_teoria = GrupoTeoria.objects.count()
+    grupos_laboratorio = GrupoLaboratorio.objects.count()
+    
+    # =============================================
+    # 7. TOP 5 CURSOS CON MÁS MATRÍCULAS
+    # =============================================
+    top_cursos = Curso.objects.annotate(
+        total_matriculas=Count('grupocurso__matricula', filter=Q(grupocurso__matricula__estado=True))
+    ).order_by('-total_matriculas')[:5]
+    
+    # =============================================
+    # 8. AULAS MÁS UTILIZADAS
+    # =============================================
+    aulas_populares = Aula.objects.annotate(
+        total_bloques=Count('bloquehorario')
+    ).order_by('-total_bloques')[:5]
+    
+    # =============================================
+    # 9. PROFESORES MÁS ACTIVOS (por cantidad de grupos)
+    # =============================================
+    profesores_activos = Profesor.objects.annotate(
+        total_grupos=Count('grupocurso')
+    ).order_by('-total_grupos')[:5]
+
+    cantidad_profesores_con_grupos = Profesor.objects.annotate(
+            total_grupos=Count('grupocurso')
+        ).filter(total_grupos__gt=0).count()
+    
+    contexto = {
+        'perfil': admin_obj.perfil,
+        'titulo': 'Panel de Control - Administrador',
+        
+        # Conteos básicos
+        'conteo_profesores': conteo_profesores,
+        'conteo_estudiantes': conteo_estudiantes,
+        'conteo_secretarias': conteo_secretarias,
+        'conteo_cursos': conteo_cursos,
+        'conteo_aulas': conteo_aulas,
+        
+        # Matrículas
+        'total_matriculas': total_matriculas,
+        'matriculas_teoria': matriculas_teoria,
+        'matriculas_lab': matriculas_lab,
+        
+        # Horarios
+        'total_bloques': total_bloques,
+        'bloques_aula_normal': bloques_aula_normal,
+        'bloques_laboratorio': bloques_laboratorio,
+        
+        # Reservas
+        'reservas_semana': reservas_semana,
+        'reservas_hoy': reservas_hoy,
+        
+        # Asistencia
+        'asistencia_semana': asistencia_semana,
+        'porcentaje_asistencia': round(porcentaje_asistencia, 1),
+        
+        # Grupos
+        'grupos_con_profesor': grupos_con_profesor,
+        'grupos_sin_profesor': grupos_sin_profesor,
+        'grupos_teoria': grupos_teoria,
+        'grupos_laboratorio': grupos_laboratorio,
+        
+        # Listados
+        'top_cursos': top_cursos,
+        'aulas_populares': aulas_populares,
+        'profesores_activos': profesores_activos,
+        'profesores_grupos_asignados': cantidad_profesores_con_grupos,
+        
+        # Fechas para referencia - Ahora muestra "Lunes Actual - Viernes Actual"
+        'hoy': hoy.strftime('%d/%m/%Y'),
+        'semana_pasada': fecha_inicio_semana.strftime('%d/%m/%Y'),  # Lunes de esta semana
+        'viernes_semana': fecha_fin_semana.strftime('%d/%m/%Y'),    # Viernes de esta semana
+    }
+    
+    return render(request, 'usuarios/admin/dashboard_admin.html', contexto)
+
+def mi_cuenta_admin(request):
+    # Autenticación
+    admin_obj, response = check_administrador_auth(request)
+    if response: 
+        return response
+
+    perfil = admin_obj.perfil
+
+    # -----------------------------
+    # POST: cambio de contraseña
+    # -----------------------------
+    if request.method == 'POST':
+        old_password = request.POST.get('old_password')
+        new_password1 = request.POST.get('new_password1')
+        new_password2 = request.POST.get('new_password2')
+
+        # 1. Validar contraseña actual
+        if old_password != perfil.password:
+            messages.error(request, 'La contraseña actual ingresada es incorrecta.')
+            return redirect('usuarios:mi_cuenta_admin')
+
+        # 2. Validar nueva contraseña
+        if new_password1 != new_password2:
+            messages.error(request, 'La nueva contraseña y su confirmación no coinciden.')
+            return redirect('usuarios:mi_cuenta_admin')
+
+        if len(new_password1) < 6:
+            messages.error(request, 'La nueva contraseña debe tener al menos 6 caracteres.')
+            return redirect('usuarios:mi_cuenta_admin')
+
+        if new_password1 == old_password:
+            messages.warning(request, 'La nueva contraseña no puede ser igual a la anterior.')
+            return redirect('usuarios:mi_cuenta_admin')
+
+        # 3. Guardar
+        try:
+            perfil.password = new_password1
+            perfil.save()
+            messages.success(request, '¡Contraseña actualizada correctamente!')
+        except Exception as e:
+            messages.error(request, f'Error al guardar la nueva contraseña: {e}')
+
+        return redirect('usuarios:mi_cuenta_admin')
+
+    # -----------------------------
+    # GET: mostrar página
+    # -----------------------------
+    contexto = {
+        'perfil': perfil,
+        'titulo': 'Mi Cuenta'
+    }
+    return render(request, 'usuarios/admin/mi_cuenta_admin.html', contexto)
+
+def gestion_cursos_admin(request):
+    perfil_obj, response = check_administrador_auth(request)
+    if response: 
+        return response
+
+    # ======================================================================
+    # 1. MANEJO DE SOLICITUDES AJAX (GET)
+    # ======================================================================
+    # Se usa para obtener dinámicamente los grupos de un curso y sus detalles (horarios, prof, etc.)
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' and request.method == 'GET':
+        accion = request.GET.get('accion')
+        
+        # A. Obtener lista de grupos de teoría para el selector de edición
+        if accion == 'obtener_grupos_curso':
+            curso_id = request.GET.get('curso_id')
+            # Filtramos solo aquellos que son Grupos de Teoría (tienen la relación grupoteoria)
+            grupos = GrupoTeoria.objects.filter(grupo_curso__curso_id=curso_id).select_related('grupo_curso')
+            data = [{'id': g.grupo_curso.id, 'grupo': g.grupo_curso.grupo} for g in grupos]
+            return JsonResponse({'grupos': data})
+
+        # B. Obtener el detalle completo de un grupo específico (Profesor, Capacidad, Horarios)
+        if accion == 'obtener_detalle_grupo':
+            grupo_id = request.GET.get('grupo_id')
+            try:
+                # Buscamos el GrupoCurso (que es la base)
+                grupo_curso = GrupoCurso.objects.select_related('profesor__perfil').get(id=grupo_id)
+                
+                # Obtenemos sus bloques horarios
+                bloques = BloqueHorario.objects.filter(grupo_curso=grupo_curso).select_related('aula')
+                horarios = [{
+                    'dia': b.dia,
+                    'inicio': b.horaInicio.strftime('%H:%M:%S') if b.horaInicio else '',  # Agregar segundos
+                    'fin': b.horaFin.strftime('%H:%M:%S') if b.horaFin else '',  # Agregar segundos
+                    'aula_id': b.aula.id if b.aula else ''
+                } for b in bloques]
+
+                data = {
+                    'id': grupo_curso.id,
+                    'profesor_id': grupo_curso.profesor.perfil.id if grupo_curso.profesor else '',
+                    'capacidad': grupo_curso.capacidad,
+                    'horarios': horarios
+                }
+                return JsonResponse({'ok': True, 'data': data})
+            except GrupoCurso.DoesNotExist:
+                return JsonResponse({'ok': False, 'msg': 'Grupo no encontrado'})
+            except Exception as e:
+                return JsonResponse({'ok': False, 'msg': f'Error al obtener detalle: {str(e)}'})
+
+        return JsonResponse({'ok': False, 'msg': 'Acción desconocida'})
+
+    # ======================================================================
+    # 2. MANEJO DE SOLICITUDES POST (CRUD)
+    # ======================================================================
+    if request.method == 'POST':
+        accion = request.POST.get('accion')
+        
+        try:
+            with transaction.atomic():
+                
+                # --- A. CREAR CURSO ---
+                if accion == 'crear_curso':
+                    Curso.objects.create(
+                        id=request.POST.get('id'),
+                        nombre=request.POST.get('nombre'),
+                        creditos=request.POST.get('creditos'),
+                        porcentajeEC1=request.POST.get('porcentajeEC1') or 0,
+                        porcentajeEP1=request.POST.get('porcentajeEP1') or 0,
+                        porcentajeEC2=request.POST.get('porcentajeEC2') or 0,
+                        porcentajeEP2=request.POST.get('porcentajeEP2') or 0,
+                        porcentajeEC3=request.POST.get('porcentajeEC3') or 0,
+                        porcentajeEP3=request.POST.get('porcentajeEP3') or 0,
+                        # URLs se inicializan en Null/Blank por defecto en el modelo
+                    )
+                    messages.success(request, "Curso creado exitosamente.")
+
+                # --- B. EDITAR CURSO ---
+                elif accion == 'editar_curso':
+                    curso = get_object_or_404(Curso, id=request.POST.get('id'))
+                    curso.nombre = request.POST.get('nombre')
+                    curso.creditos = request.POST.get('creditos')
+                    curso.porcentajeEC1 = request.POST.get('porcentajeEC1') or 0
+                    curso.porcentajeEP1 = request.POST.get('porcentajeEP1') or 0
+                    curso.porcentajeEC2 = request.POST.get('porcentajeEC2') or 0
+                    curso.porcentajeEP2 = request.POST.get('porcentajeEP2') or 0
+                    curso.porcentajeEC3 = request.POST.get('porcentajeEC3') or 0
+                    curso.porcentajeEP3 = request.POST.get('porcentajeEP3') or 0
+                    
+                    # Lógica para manejar archivos subidos (AGREGAR ESTO)
+                    # 1. Sílabo
+                    if 'silabo' in request.FILES:
+                        curso.silabo_url = request.FILES['silabo']
+                    
+                    # 2. Archivos de Fase 1
+                    if 'fase1alta' in request.FILES:
+                        curso.Fase1notaAlta_url = request.FILES['fase1alta']
+                    if 'fase1media' in request.FILES:
+                        curso.Fase1notaMedia_url = request.FILES['fase1media']
+                    if 'fase1baja' in request.FILES:
+                        curso.Fase1notaBaja_url = request.FILES['fase1baja']
+                    
+                    # 3. Archivos de Fase 2
+                    if 'fase2alta' in request.FILES:
+                        curso.Fase2notaAlta_url = request.FILES['fase2alta']
+                    if 'fase2media' in request.FILES:
+                        curso.Fase2notaMedia_url = request.FILES['fase2media']
+                    if 'fase2baja' in request.FILES:
+                        curso.Fase2notaBaja_url = request.FILES['fase2baja']
+                    
+                    # 4. Archivos de Fase 3
+                    if 'fase3alta' in request.FILES:
+                        curso.Fase3notaAlta_url = request.FILES['fase3alta']
+                    if 'fase3media' in request.FILES:
+                        curso.Fase3notaMedia_url = request.FILES['fase3media']
+                    if 'fase3baja' in request.FILES:
+                        curso.Fase3notaBaja_url = request.FILES['fase3baja']
+                    
+                    # Lógica para eliminar archivos si se marcaron los checkboxes (MANTENER ESTO)
+                    if request.POST.get('eliminar_silabo') == '1': 
+                        curso.silabo_url = None
+                    if request.POST.get('eliminar_fase1alta') == '1': 
+                        curso.Fase1notaAlta_url = None
+                    if request.POST.get('eliminar_fase1media') == '1': 
+                        curso.Fase1notaMedia_url = None
+                    if request.POST.get('eliminar_fase1baja') == '1': 
+                        curso.Fase1notaBaja_url = None
+                    if request.POST.get('eliminar_fase2alta') == '1': 
+                        curso.Fase2notaAlta_url = None
+                    if request.POST.get('eliminar_fase2media') == '1': 
+                        curso.Fase2notaMedia_url = None
+                    if request.POST.get('eliminar_fase2baja') == '1': 
+                        curso.Fase2notaBaja_url = None
+                    if request.POST.get('eliminar_fase3alta') == '1': 
+                        curso.Fase3notaAlta_url = None
+                    if request.POST.get('eliminar_fase3media') == '1': 
+                        curso.Fase3notaMedia_url = None
+                    if request.POST.get('eliminar_fase3baja') == '1': 
+                        curso.Fase3notaBaja_url = None
+                    
+                    curso.save()
+                    messages.success(request, "Información del curso actualizada.")
+
+                # --- C. ELIMINAR CURSO ---
+                elif accion == 'eliminar_curso':
+                    curso_id = request.POST.get('curso_id')
+                    # Verificar si tiene grupos asignados antes de eliminar
+                    if GrupoCurso.objects.filter(curso_id=curso_id).exists():
+                        messages.error(request, "No se puede eliminar el curso debido a que hay grupos asignados.")
+                    else:
+                        Curso.objects.filter(id=curso_id).delete()
+                        messages.success(request, "Curso eliminado correctamente.")
+
+                # --- D. CREAR GRUPO TEORÍA ---
+                elif accion == 'crear_grupo_teoria':
+                    curso_id = request.POST.get('curso_id')
+                    letra_grupo = request.POST.get('grupo', '').upper() # A, B, C...
+                    profesor_id = request.POST.get('profesor_id')
+                    capacidad = request.POST.get('capacidad')
+                    horarios_json = request.POST.get('horarios_json', '[]')
+                    
+                    # DEBUG: Mostrar lo que llega
+                    print(f"DEBUG - horarios_json recibido: {horarios_json}")
+                    
+                    # Generación del ID Compuesto: CURSOID + LETRA
+                    nuevo_id = f"{curso_id}{letra_grupo}"
+                    
+                    if GrupoCurso.objects.filter(id=nuevo_id).exists():
+                        messages.error(request, f"El Grupo {letra_grupo} para este curso ya existe (ID: {nuevo_id}).")
+                    else:
+                        try:
+                            # Validar horarios_json
+                            if not horarios_json or horarios_json.strip() == '':
+                                raise ValueError("No se recibieron datos de horarios. Por favor agregue al menos un horario.")
+                            
+                            # 1. Parsear JSON
+                            horarios = json.loads(horarios_json)
+                            
+                            # Validar que haya al menos un horario
+                            if not isinstance(horarios, list) or len(horarios) == 0:
+                                raise ValueError("Debe agregar al menos un bloque de horario.")
+                            
+                            # 2. Iniciar Transacción Atómica
+                            with transaction.atomic():
+                                # Validación de existencia de objetos FK y conversión de capacidad
+                                profesor = Profesor.objects.get(perfil__id=profesor_id) if profesor_id else None
+                                curso = Curso.objects.get(id=curso_id)
+                                capacidad_int = int(capacidad)
+                                
+                                # 3. Validar cada horario
+                                for i, h in enumerate(horarios, 1):
+                                    try:
+                                        aula_obj = Aula.objects.get(id=h['aula_id'])
+                                    except ObjectDoesNotExist:
+                                        raise ValueError(f"El aula con ID '{h['aula_id']}' no existe.")
+                                    
+                                    # Validar campos requeridos
+                                    if not h.get('dia') or not h.get('inicio') or not h.get('fin'):
+                                        raise ValueError(f"El horario {i} tiene campos incompletos.")
+                                    
+                                    # Convertir tiempos
+                                    try:
+                                        inicio_time = datetime.strptime(h['inicio'], '%H:%M:%S').time()
+                                        fin_time = datetime.strptime(h['fin'], '%H:%M:%S').time()
+                                    except ValueError:
+                                        raise ValueError(f"Formato de hora inválido en horario {i}. Use HH:MM:SS")
+                                    
+                                    # Validar que inicio < fin
+                                    if inicio_time >= fin_time:
+                                        raise ValueError(f"El horario {i} tiene hora de inicio ({h['inicio']}) mayor o igual a la hora de fin ({h['fin']}).")
+                                    
+                                    # 3.1 Verificar cruce con horarios existentes en la misma aula
+                                    horarios_cruzados_aula = BloqueHorario.objects.filter(
+                                        aula=aula_obj,
+                                        dia=h['dia']
+                                    ).exclude(
+                                        Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                    )
+                                    
+                                    if horarios_cruzados_aula.exists():
+                                        conflicto = horarios_cruzados_aula.first()
+                                        curso_conflicto = conflicto.grupo_curso.curso.nombre
+                                        grupo_conflicto = conflicto.grupo_curso.grupo
+                                        raise ValueError(
+                                            f"Conflicto de horario en aula {aula_obj.id} el día {h['dia']} de {h['inicio']} a {h['fin']}. "
+                                            f"Ya existe la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en ese horario."
+                                        )
+                                    
+                                    # 3.2 Verificar disponibilidad del docente (si se asignó un profesor)
+                                    if profesor:
+                                        # Buscar horarios donde el docente ya tenga clases asignadas
+                                        horarios_docente = BloqueHorario.objects.filter(
+                                            grupo_curso__profesor=profesor,
+                                            dia=h['dia']
+                                        ).exclude(
+                                            Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                        )
+                                        
+                                        if horarios_docente.exists():
+                                            conflicto_docente = horarios_docente.first()
+                                            curso_conflicto = conflicto_docente.grupo_curso.curso.nombre
+                                            grupo_conflicto = conflicto_docente.grupo_curso.grupo
+                                            aula_conflicto = conflicto_docente.aula.id
+                                            raise ValueError(
+                                                f"El profesor {profesor.perfil.nombre} ya tiene clase asignada el día {h['dia']} entre {h['inicio']} a {h['fin']}. "
+                                                f"Está asignado a la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en el aula {aula_conflicto} en ese horario."
+                                            )
+
+                                # 4. Crear el GrupoCurso base
+                                nuevo_grupo = GrupoCurso.objects.create(
+                                    id=nuevo_id,
+                                    curso=curso,
+                                    profesor=profesor,
+                                    grupo=letra_grupo,
+                                    capacidad=capacidad_int
+                                )
+                                
+                                # 5. Crear la especialización GrupoTeoria
+                                GrupoTeoria.objects.create(grupo_curso=nuevo_grupo)
+                                
+                                # 6. Crear los Bloques de Horario
+                                for h in horarios:
+                                    aula_obj = Aula.objects.get(id=h['aula_id'])
+                                    BloqueHorario.objects.create(
+                                        dia=h['dia'],
+                                        horaInicio=h['inicio'],
+                                        horaFin=h['fin'],
+                                        grupo_curso=nuevo_grupo,
+                                        aula=aula_obj
+                                    )
+                            
+                            messages.success(request, f"Grupo de teoría {letra_grupo} creado exitosamente.")
+
+                        except ObjectDoesNotExist as e:
+                            messages.error(request, f"Error de referencia: {str(e)}")
+                        except ValueError as e:
+                            messages.error(request, f"Error en los datos: {str(e)}")
+                        except json.JSONDecodeError as e:
+                            messages.error(request, f"Error en el formato de los horarios (JSON inválido): {str(e)}")
+                        except Exception as e:
+                            messages.error(request, f"Error inesperado al crear el grupo: {str(e)}")
+
+                # --- E. EDITAR GRUPO TEORÍA (GESTIONAR) ---
+                elif accion == 'editar_grupo_teoria':
+                    grupo_id = request.POST.get('grupo_id') # ID completo (Ej: INF101A)
+                    profesor_id = request.POST.get('profesor_id')
+                    capacidad = request.POST.get('capacidad')
+                    horarios_json = request.POST.get('horarios_json', '[]')
+                    
+                    # 1. Recuperar GrupoCurso o lanzar 404 si no existe
+                    grupo_curso = get_object_or_404(GrupoCurso, id=grupo_id)
+                    
+                    try:
+                        # Validar horarios_json
+                        if not horarios_json or horarios_json.strip() == '':
+                            raise ValueError("No se recibieron datos de horarios. Por favor agregue al menos un horario.")
+                        
+                        # Parsear JSON
+                        horarios = json.loads(horarios_json)
+                        
+                        # Validar que haya al menos un horario
+                        if not isinstance(horarios, list) or len(horarios) == 0:
+                            raise ValueError("Debe agregar al menos un bloque de horario.")
+                        
+                        # 2. Iniciar Transacción Atómica
+                        with transaction.atomic():
+                            # Validación de existencia de objetos FK y conversión de capacidad
+                            profesor = Profesor.objects.get(perfil__id=profesor_id) if profesor_id else None
+                            capacidad_int = int(capacidad) # Si no es un entero, lanza ValueError
+                            
+                            # 3. Validar cada horario antes de eliminar los existentes
+                            for i, h in enumerate(horarios, 1):
+                                try:
+                                    aula_obj = Aula.objects.get(id=h['aula_id'])
+                                except ObjectDoesNotExist:
+                                    raise ValueError(f"El aula con ID '{h['aula_id']}' no existe.")
+                                
+                                # Validar campos requeridos
+                                if not h.get('dia') or not h.get('inicio') or not h.get('fin'):
+                                    raise ValueError(f"El horario {i} tiene campos incompletos.")
+                                
+                                # Convertir tiempos
+                                try:
+                                    inicio_time = datetime.strptime(h['inicio'], '%H:%M:%S').time()
+                                    fin_time = datetime.strptime(h['fin'], '%H:%M:%S').time()
+                                except ValueError:
+                                    raise ValueError(f"Formato de hora inválido en horario {i}. Use HH:MM:SS")
+                                
+                                # Validar que inicio < fin
+                                if inicio_time >= fin_time:
+                                    raise ValueError(f"El horario {i} tiene hora de inicio ({h['inicio']}) mayor o igual a la hora de fin ({h['fin']}).")
+                                
+                                # 3.1 Verificar cruce con horarios existentes en la misma aula
+                                # Excluir los horarios del grupo actual que estamos editando
+                                horarios_cruzados_aula = BloqueHorario.objects.filter(
+                                    aula=aula_obj,
+                                    dia=h['dia']
+                                ).exclude(
+                                    grupo_curso=grupo_curso  # Excluir los horarios del grupo actual
+                                ).exclude(
+                                    Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                )
+                                
+                                if horarios_cruzados_aula.exists():
+                                    conflicto = horarios_cruzados_aula.first()
+                                    curso_conflicto = conflicto.grupo_curso.curso.nombre
+                                    grupo_conflicto = conflicto.grupo_curso.grupo
+                                    raise ValueError(
+                                        f"Conflicto de horario en aula {aula_obj.id} el día {h['dia']} de {h['inicio']} a {h['fin']}. "
+                                        f"Ya existe la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en ese horario."
+                                    )
+                                
+                                # 3.2 Verificar disponibilidad del docente (si se asignó un profesor)
+                                if profesor:
+                                    # Buscar horarios donde el docente ya tenga clases asignadas
+                                    # Excluir los horarios del grupo actual que estamos editando
+                                    horarios_docente = BloqueHorario.objects.filter(
+                                        grupo_curso__profesor=profesor,
+                                        dia=h['dia']
+                                    ).exclude(
+                                        grupo_curso=grupo_curso  # Excluir los horarios del grupo actual
+                                    ).exclude(
+                                        Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                    )
+                                    
+                                    if horarios_docente.exists():
+                                        conflicto_docente = horarios_docente.first()
+                                        curso_conflicto = conflicto_docente.grupo_curso.curso.nombre
+                                        grupo_conflicto = conflicto_docente.grupo_curso.grupo
+                                        aula_conflicto = conflicto_docente.aula.id
+                                        raise ValueError(
+                                            f"El profesor {profesor.perfil.nombre} ya tiene clase asignada el día {h['dia']} entre {h['inicio']} a {h['fin']}. "
+                                            f"Está asignado a la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en el aula {aula_conflicto} en ese horario."
+                                        )
+
+                            # 4. Actualizar datos básicos
+                            grupo_curso.profesor = profesor
+                            grupo_curso.capacidad = capacidad_int
+                            grupo_curso.save()
+                            
+                            # 5. Actualizar horarios: Estrategia de reemplazo total (Borrar y crear)
+                            BloqueHorario.objects.filter(grupo_curso=grupo_curso).delete()
+                            
+                            for h in horarios:
+                                aula_obj = Aula.objects.get(id=h['aula_id'])
+                                BloqueHorario.objects.create(
+                                    dia=h['dia'],
+                                    horaInicio=h['inicio'],
+                                    horaFin=h['fin'],
+                                    grupo_curso=grupo_curso,
+                                    aula=aula_obj
+                                )
+                        
+                        messages.success(request, "Grupo actualizado correctamente.")
+                    
+                    except ObjectDoesNotExist as e:
+                        # Captura error si el Profesor no se encuentra.
+                        messages.error(request, f"Error de referencia: {str(e)}")
+                    except ValueError as e:
+                        # Captura errores de conversión (ej. capacidad no es int) o errores de Aula
+                        messages.error(request, f"Error en los datos proporcionados: {str(e)}")
+                    except json.JSONDecodeError as e:
+                        messages.error(request, f"Error en el formato de los horarios (JSON inválido): {str(e)}")
+                    except Exception as e:
+                        # Captura errores genéricos, como JSON mal formado
+                        messages.error(request, f"Error inesperado al actualizar el grupo: {str(e)}")
+
+                # --- F. ELIMINAR GRUPO ---
+                elif accion == 'eliminar_grupo':
+                    grupo_id = request.POST.get('grupo_id')
+                    # Al eliminar GrupoCurso, el CASCADE elimina GrupoTeoria y BloqueHorario
+                    GrupoCurso.objects.filter(id=grupo_id).delete()
+                    messages.success(request, "Grupo eliminado correctamente.")
+
+        except IntegrityError as e:
+            messages.error(request, f"Error de integridad en la base de datos: {str(e)}")
+        except Exception as e:
+            messages.error(request, f"Ocurrió un error inesperado: {str(e)}")
+            
+        return redirect('usuarios:gestion_cursos_admin')
+
+    # ======================================================================
+    # 3. LÓGICA GET (RENDERIZADO DE LA PÁGINA)
+    # ======================================================================
+    
+    # Obtener cursos con anotaciones para los contadores
+    # num_grupos_teoria: Cuenta cuántos grupos tiene que sean de teoría
+    # num_matriculados: Suma de matrículas en grupos que son de teoría
+    cursos = Curso.objects.annotate(
+        num_grupos_teoria=Count('grupocurso__grupoteoria', distinct=True),
+        num_matriculados=Count('grupocurso__matricula', 
+                               filter=Q(grupocurso__grupoteoria__isnull=False), 
+                               distinct=True)
+    ).order_by('id')
+
+    # Listas auxiliares para llenar los selectores de los modales
+    profesores_teoria = Profesor.objects.filter(es_teoria=True).select_related('perfil').order_by('perfil__nombre')
+    aulas = Aula.objects.all().order_by('id')
+
+    contexto = {
+        'perfil': perfil_obj.perfil, 
+        'titulo': 'Gestión de Cursos',
+        'cursos': cursos,
+        'profesores': profesores_teoria,
+        'aulas': aulas
+    }
+    return render(request, 'usuarios/admin/gestion_cursos_admin.html', contexto)
+
+def ver_horarios_clases_admin(request):
+    perfil_obj, response = check_administrador_auth(request)
+    if response: 
+        return response
+
+    # ======================================================================
+    # 1. MANEJO DE SOLICITUDES AJAX (GET) - Para cargar horarios por aula
+    # ======================================================================
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' and request.method == 'GET':
+        accion = request.GET.get('accion')
+        
+        # Obtener horarios de un aula específica
+        if accion == 'obtener_horarios_aula':
+            aula_id = request.GET.get('aula_id')
+            
+            try:
+                # Obtener el aula
+                aula = Aula.objects.get(id=aula_id)
+                
+                # COLORES (excluyendo colores muy oscuros)
+                COLOR_OPTIONS = [
+                    'bg-primary', 'bg-success', 'bg-info', 
+                    'bg-warning', 'bg-danger', 'bg-secondary'
+                ]
+                curso_colores = {}
+                color_index = 0
+                
+                # Obtener todas las actividades para esta aula
+                horario_completo = []
+                puntos_corte = set()
+                
+                # 1. OBTENER CLASES REGULARES (GrupoCurso con BloqueHorario)
+                bloques_clases = BloqueHorario.objects.filter(aula=aula).select_related(
+                    'grupo_curso__curso',
+                    'grupo_curso__profesor__perfil'
+                ).order_by('horaInicio')
+                
+                print(f"DEBUG - Total bloques encontrados: {bloques_clases.count()}")
+                
+                for bloque in bloques_clases:
+                    # Determinar tipo: Teoría o Laboratorio
+                    tipo = "CLS"  # Por defecto
+                    try:
+                        # Verificar si es grupo de teoría
+                        bloque.grupo_curso.grupoteoria
+                        tipo = "TEO"
+                    except:
+                        try:
+                            # Verificar si es grupo de laboratorio
+                            bloque.grupo_curso.grupolaboratorio
+                            tipo = "LAB"
+                        except:
+                            tipo = "CLS"  # Clase genérica
+                    
+                    # Profesor info
+                    profesor_nombre = ""
+                    if bloque.grupo_curso.profesor and bloque.grupo_curso.profesor.perfil:
+                        profesor_nombre = bloque.grupo_curso.profesor.perfil.nombre
+                    
+                    print(f"DEBUG - Bloque: {bloque.grupo_curso.curso.nombre} - {bloque.dia} - {bloque.horaInicio} a {bloque.horaFin} - Tipo: {tipo}")
+                    
+                    # Agregar al horario completo
+                    horario_completo.append({
+                        'tipo_actividad': 'CLASE',
+                        'bloque': bloque,
+                        'horaInicio': bloque.horaInicio,
+                        'horaFin': bloque.horaFin,
+                        'dia': bloque.dia,
+                        'curso': bloque.grupo_curso.curso,
+                        'profesor_nombre': profesor_nombre,
+                        'grupo': bloque.grupo_curso.grupo,
+                        'tipo': tipo
+                    })
+                    
+                    # Agregar puntos de corte (sin segundos/microsegundos)
+                    puntos_corte.add(bloque.horaInicio.replace(second=0, microsecond=0))
+                    puntos_corte.add(bloque.horaFin.replace(second=0, microsecond=0))
+                    
+                    # Asignar color al curso
+                    curso_id = bloque.grupo_curso.curso.id
+                    if curso_id not in curso_colores:
+                        curso_colores[curso_id] = COLOR_OPTIONS[color_index % len(COLOR_OPTIONS)]
+                        color_index += 1
+                
+                # 2. OBTENER RESERVAS PARA ESTA AULA
+                # Obtener fecha actual para filtrar reservas de esta semana
+                hoy = date.today()
+                inicio_semana = hoy - timedelta(days=hoy.weekday())  # Lunes
+                fin_semana = inicio_semana + timedelta(days=4)  # Viernes
+                
+                reservas = Reserva.objects.filter(
+                    aula=aula,
+                    fecha_reserva__range=[inicio_semana, fin_semana]
+                ).select_related('profesor__perfil')
+                
+                print(f"DEBUG - Total reservas encontradas: {reservas.count()}")
+                
+                for reserva in reservas:
+                    # Profesor info
+                    profesor_nombre = ""
+                    if reserva.profesor and reserva.profesor.perfil:
+                        profesor_nombre = reserva.profesor.perfil.nombre
+                    
+                    # Determinar día de la semana
+                    dia_semana = reserva.fecha_reserva.weekday()
+                    dias_semana = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+                    dia = dias_semana[dia_semana] if dia_semana < 5 else None
+                    
+                    if dia:
+                        horario_completo.append({
+                            'tipo_actividad': 'RESERVA',
+                            'reserva': reserva,
+                            'horaInicio': reserva.hora_inicio,
+                            'horaFin': reserva.hora_fin,
+                            'dia': dia,
+                            'curso': None,
+                            'profesor_nombre': profesor_nombre,
+                            'motivo': "RESERVA",
+                            'tipo': 'RES'
+                        })
+                        
+                        # Agregar puntos de corte
+                        puntos_corte.add(reserva.hora_inicio.replace(second=0, microsecond=0))
+                        puntos_corte.add(reserva.hora_fin.replace(second=0, microsecond=0))
+                
+                print(f"DEBUG - Total actividades: {len(horario_completo)}")
+                print(f"DEBUG - Puntos de corte: {len(puntos_corte)}")
+                
+                # ======================================================================
+                # GENERAR HORAS DINÁMICAS
+                # ======================================================================
+                # Convertir puntos de corte de 'time' a 'datetime'
+                dummy_date = hoy
+                puntos_corte_dt = sorted(list(set([
+                    datetime.combine(dummy_date, t) for t in puntos_corte
+                ])))
+                
+                # Crear intervalos de hora
+                horas = []
+                hora_actual = None
+                
+                for dt_siguiente in puntos_corte_dt:
+                    if hora_actual is None:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    dt_inicio_fila = hora_actual
+                    dt_fin_fila = dt_siguiente
+
+                    duracion_minutos = (dt_fin_fila - dt_inicio_fila).total_seconds() / 60
+                    if duracion_minutos < 11:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    if dt_inicio_fila >= dt_fin_fila:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    # Formatear rango de hora
+                    hora_inicio_str = dt_inicio_fila.strftime("%H:%M")
+                    hora_fin_str = dt_fin_fila.strftime("%H:%M")
+                    horas.append(f"{hora_inicio_str} - {hora_fin_str}")
+                    
+                    hora_actual = dt_siguiente
+                
+                # Si no hay actividades, usar horas por defecto
+                if not horas:
+                    hora_actual = datetime.strptime('07:00', '%H:%M')
+                    hora_final = datetime.strptime('21:00', '%H:%M')
+                    
+                    while hora_actual < hora_final:
+                        hora_str = hora_actual.strftime('%H:%M')
+                        hora_siguiente = hora_actual + timedelta(hours=1)
+                        horas.append(f"{hora_str} - {hora_siguiente.strftime('%H:%M')}")
+                        hora_actual = hora_siguiente
+                
+                print(f"DEBUG - Horas generadas: {horas}")
+                
+                # ======================================================================
+                # ESTRUCTURAR DATOS DEL HORARIO
+                # ======================================================================
+                dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+                horario_data = {}
+                
+                # Para cada intervalo de hora
+                for hora_idx, rango_hora in enumerate(horas):
+                    hora_inicio_str, hora_fin_str = rango_hora.split(" - ")
+                    
+                    # Convertir a datetime para comparar
+                    try:
+                        hora_inicio_dt = datetime.strptime(hora_inicio_str, "%H:%M").time()
+                        hora_fin_dt = datetime.strptime(hora_fin_str, "%H:%M").time()
+                    except:
+                        # Si hay error, saltar este intervalo
+                        continue
+                    
+                    horario_data[str(hora_idx)] = {}
+                    
+                    # Para cada día
+                    for dia_idx, dia_key in enumerate(dias):
+                        actividad_en_slot = None
+                        
+                        # Buscar actividad que coincida en este slot
+                        for actividad in horario_completo:
+                            # Verificar si es el día correcto
+                            if actividad['dia'] != dia_key:
+                                continue
+                            
+                            # Verificar si la actividad cubre este intervalo
+                            actividad_inicio = actividad['horaInicio']
+                            actividad_fin = actividad['horaFin']
+                            
+                            if actividad_inicio <= hora_inicio_dt and actividad_fin > hora_inicio_dt:
+                                print(f"DEBUG - ¡COINCIDE! Actividad encontrada para {dia_key} {rango_hora}")
+                                
+                                # Es una clase regular
+                                if actividad['tipo_actividad'] == 'CLASE':
+                                    curso = actividad['curso']
+                                    curso_id = str(curso.id)
+                                    
+                                    actividad_en_slot = {
+                                        'tipo': actividad['tipo'],
+                                        'nombre': curso.nombre,
+                                        'codigo_curso': curso_id,
+                                        'codigo_grupo': f"{curso_id}-{actividad['grupo']}",
+                                        'profesor': actividad['profesor_nombre'],
+                                        'aula_id': aula.id,
+                                        'color': curso_colores.get(curso_id, 'bg-secondary'),
+                                        'hora_inicio': actividad_inicio.strftime("%H:%M:%S"),
+                                        'hora_fin': actividad_fin.strftime("%H:%M:%S"),
+                                        'es_reserva': False
+                                    }
+                                
+                                # Es una reserva
+                                else:
+                                    actividad_en_slot = {
+                                        'tipo': 'RES',
+                                        'nombre': actividad.get('motivo', 'Reserva de Aula'),
+                                        'codigo_curso': 'RES',
+                                        'codigo_grupo': 'RESERVA',
+                                        'profesor': actividad['profesor_nombre'],
+                                        'aula_id': aula.id,
+                                        'color': 'bg-secondary',
+                                        'hora_inicio': actividad_inicio.strftime("%H:%M:%S"),
+                                        'hora_fin': actividad_fin.strftime("%H:%M:%S"),
+                                        'es_reserva': True,
+                                        'motivo': actividad.get('motivo', '')
+                                    }
+                                break
+                        
+                        horario_data[str(hora_idx)][str(dia_idx)] = actividad_en_slot
+                        if actividad_en_slot:
+                            print(f"DEBUG - Asignado: [{hora_idx}][{dia_idx}] = {actividad_en_slot['nombre']}")
+                
+                return JsonResponse({
+                    'ok': True,
+                    'aula': {
+                        'id': aula.id,
+                        'tipo': aula.tipo,
+                    },
+                    'horas': horas,
+                    'horario_data': horario_data,
+                    'curso_colores': curso_colores
+                })
+                
+            except Aula.DoesNotExist:
+                return JsonResponse({'ok': False, 'msg': 'Aula no encontrada'})
+            except Exception as e:
+                import traceback
+                print(f"ERROR: {str(e)}")
+                print(traceback.format_exc())
+                return JsonResponse({'ok': False, 'msg': f'Error al cargar horarios: {str(e)}'})
+        
+        # Exportar horario a PDF
+        elif accion == 'exportar_pdf':
+            aula_id = request.GET.get('aula_id')
+            
+            try:
+                aula = Aula.objects.get(id=aula_id)
+                
+                # USAR LA MISMA LÓGICA QUE EN LA VISTA PRINCIPAL
+                from django.utils import timezone
+                hoy = date.today()
+                inicio_semana = hoy - timedelta(days=hoy.weekday())
+                fin_semana = inicio_semana + timedelta(days=4)
+                
+                # 1. Obtener datos EXACTAMENTE como en la vista principal
+                COLOR_OPTIONS = ['bg-primary', 'bg-success', 'bg-info', 'bg-warning', 'bg-danger', 'bg-secondary']
+                curso_colores = {}
+                color_index = 0
+                
+                horario_completo = []
+                puntos_corte = set()
+                
+                # BloqueHorario para esta aula
+                bloques_clases = BloqueHorario.objects.filter(aula=aula).select_related(
+                    'grupo_curso__curso',
+                    'grupo_curso__profesor__perfil'
+                ).order_by('horaInicio')
+                
+                for bloque in bloques_clases:
+                    tipo = "TEO"
+                    try:
+                        bloque.grupo_curso.grupoteoria
+                    except:
+                        tipo = "LAB"
+                    
+                    profesor_nombre = ""
+                    if bloque.grupo_curso.profesor and bloque.grupo_curso.profesor.perfil:
+                        profesor_nombre = bloque.grupo_curso.profesor.perfil.nombre
+                    
+                    horario_completo.append({
+                        'tipo_actividad': 'CLASE',
+                        'bloque': bloque,
+                        'horaInicio': bloque.horaInicio,
+                        'horaFin': bloque.horaFin,
+                        'dia': bloque.dia,
+                        'curso': bloque.grupo_curso.curso,
+                        'profesor_nombre': profesor_nombre,
+                        'grupo': bloque.grupo_curso.grupo,
+                        'tipo': tipo
+                    })
+                    
+                    puntos_corte.add(bloque.horaInicio.replace(second=0, microsecond=0))
+                    puntos_corte.add(bloque.horaFin.replace(second=0, microsecond=0))
+                    
+                    curso_id = bloque.grupo_curso.curso.id
+                    if curso_id not in curso_colores:
+                        curso_colores[curso_id] = COLOR_OPTIONS[color_index % len(COLOR_OPTIONS)]
+                        color_index += 1
+                
+                # Reservas
+                reservas = Reserva.objects.filter(
+                    aula=aula,
+                    fecha_reserva__range=[inicio_semana, fin_semana]
+                ).select_related('profesor__perfil')
+                
+                for reserva in reservas:
+                    profesor_nombre = ""
+                    if reserva.profesor and reserva.profesor.perfil:
+                        profesor_nombre = reserva.profesor.perfil.nombre
+                    
+                    dia_semana = reserva.fecha_reserva.weekday()
+                    dias_semana = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+                    dia = dias_semana[dia_semana] if dia_semana < 5 else None
+                    
+                    if dia:
+                        horario_completo.append({
+                            'tipo_actividad': 'RESERVA',
+                            'reserva': reserva,
+                            'horaInicio': reserva.hora_inicio,
+                            'horaFin': reserva.hora_fin,
+                            'dia': dia,
+                            'curso': None,
+                            'profesor_nombre': profesor_nombre,
+                            'motivo': 'RESERVA',
+                            'tipo': 'RES'
+                        })
+                        
+                        puntos_corte.add(reserva.hora_inicio.replace(second=0, microsecond=0))
+                        puntos_corte.add(reserva.hora_fin.replace(second=0, microsecond=0))
+                
+                # 2. Generar horas dinámicas (MISMA LÓGICA)
+                dummy_date = hoy
+                puntos_corte_dt = sorted(list(set([
+                    datetime.combine(dummy_date, t) for t in puntos_corte
+                ])))
+                
+                horas = []
+                hora_actual = None
+                
+                for dt_siguiente in puntos_corte_dt:
+                    if hora_actual is None:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    dt_inicio_fila = hora_actual
+                    dt_fin_fila = dt_siguiente
+
+                    duracion_minutos = (dt_fin_fila - dt_inicio_fila).total_seconds() / 60
+                    if duracion_minutos < 11:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    if dt_inicio_fila >= dt_fin_fila:
+                        hora_actual = dt_siguiente
+                        continue
+                    
+                    hora_inicio_str = dt_inicio_fila.strftime("%H:%M")
+                    hora_fin_str = dt_fin_fila.strftime("%H:%M")
+                    horas.append(f"{hora_inicio_str} - {hora_fin_str}")
+                    
+                    hora_actual = dt_siguiente
+                
+                if not horas:
+                    hora_actual = datetime.strptime('07:00', '%H:%M')
+                    hora_final = datetime.strptime('21:00', '%H:%M')
+                    
+                    while hora_actual < hora_final:
+                        hora_str = hora_actual.strftime('%H:%M')
+                        hora_siguiente = hora_actual + timedelta(hours=1)
+                        horas.append(f"{hora_str} - {hora_siguiente.strftime('%H:%M')}")
+                        hora_actual = hora_siguiente
+                
+                print(f"PDF DEBUG - Horas dinámicas: {len(horas)} intervalos")
+                print(f"PDF DEBUG - Primeras horas: {horas[:3]}")
+                
+                # 3. Estructurar datos (MISMA LÓGICA)
+                dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+                dias_display = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
+                horario_data = {}
+                
+                # Para cada intervalo de hora
+                for hora_idx, rango_hora in enumerate(horas):
+                    hora_inicio_str, hora_fin_str = rango_hora.split(" - ")
+                    
+                    try:
+                        hora_inicio_dt = datetime.strptime(hora_inicio_str, "%H:%M").time()
+                        hora_fin_dt = datetime.strptime(hora_fin_str, "%H:%M").time()
+                    except:
+                        continue
+                    
+                    horario_data[str(hora_idx)] = {}
+                    
+                    # Para cada día
+                    for dia_idx, dia_key in enumerate(dias):
+                        actividad_en_slot = None
+                        
+                        # Buscar actividad que coincida en este slot
+                        for actividad in horario_completo:
+                            # Verificar si es el día correcto
+                            if actividad['dia'] != dia_key:
+                                continue
+                            
+                            # Convertir horas de actividad
+                            act_inicio = datetime.combine(dummy_date, actividad['horaInicio'])
+                            act_fin = datetime.combine(dummy_date, actividad['horaFin'])
+                            hora_inicio_dt_full = datetime.combine(dummy_date, hora_inicio_dt)
+                            
+                            # MISMA LÓGICA EXACTA: act_inicio <= hora_inicio_dt_full AND act_fin > hora_inicio_dt_full
+                            if act_inicio <= hora_inicio_dt_full and act_fin > hora_inicio_dt_full:
+                                
+                                # Es una clase regular
+                                if actividad['tipo_actividad'] == 'CLASE':
+                                    curso = actividad['curso']
+                                    curso_id = str(curso.id)
+                                    
+                                    actividad_en_slot = {
+                                        'tipo': actividad['tipo'],
+                                        'nombre': curso.nombre,
+                                        'codigo_curso': curso_id,
+                                        'codigo_grupo': f"{curso_id}-{actividad['grupo']}",
+                                        'profesor': actividad['profesor_nombre'],
+                                        'aula_id': aula.id,
+                                        'color': curso_colores.get(curso_id, 'bg-secondary'),
+                                        'hora_inicio': actividad['horaInicio'].strftime("%H:%M"),
+                                        'hora_fin': actividad['horaFin'].strftime("%H:%M"),
+                                        'es_reserva': False
+                                    }
+                                
+                                # Es una reserva
+                                else:
+                                    actividad_en_slot = {
+                                        'tipo': 'RES',
+                                        'nombre': actividad.get('motivo', 'Reserva de Aula'),
+                                        'codigo_curso': 'RES',
+                                        'codigo_grupo': 'RESERVA',
+                                        'profesor': actividad['profesor_nombre'],
+                                        'aula_id': aula.id,
+                                        'color': 'bg-secondary',
+                                        'hora_inicio': actividad['horaInicio'].strftime("%H:%M"),
+                                        'hora_fin': actividad['horaFin'].strftime("%H:%M"),
+                                        'es_reserva': True,
+                                        'motivo': actividad.get('motivo', '')
+                                    }
+                                break
+                        
+                        horario_data[str(hora_idx)][str(dia_idx)] = actividad_en_slot
+                
+                # DEBUG
+                print(f"PDF DEBUG - Estructura final:")
+                for hora_idx in range(len(horas)):
+                    for dia_idx in range(len(dias)):
+                        celda = horario_data[str(hora_idx)][str(dia_idx)]
+                        if celda:
+                            print(f"  [{hora_idx}][{dia_idx}]: {celda['nombre'][:20]}")
+                
+                curso_colores_map = {}
+                for i, (curso_id, _) in enumerate(curso_colores.items()):
+                    curso_colores_map[str(curso_id)] = f"color-{i % 10}"
+
+                # Preparar contexto
+                contexto = {
+                    'aula': aula,
+                    'horas': horas,
+                    'horas_range': range(len(horas)),
+                    'num_horas': len(horas),
+                    'dias': dias_display,
+                    'dias_range': range(len(dias)),
+                    'horario_data': horario_data,
+                    'curso_colores_map': curso_colores_map,
+                    'fecha_emision': hoy.strftime("%d/%m/%Y"),
+                    'semana_actual': f"{inicio_semana.strftime('%d/%m')} - {fin_semana.strftime('%d/%m')}"
+                }
+                
+                # Renderizar template
+                html_string = render_to_string('usuarios/secretaria/horario_aula_pdf.html', contexto)
+                
+                # Crear PDF
+                response = HttpResponse(content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="horario_aula_{aula.id}_{hoy.strftime("%Y%m%d")}.pdf"'
+                
+                pisa_status = pisa.CreatePDF(
+                    html_string, 
+                    dest=response,
+                    encoding='UTF-8'
+                )
+                
+                if pisa_status.err:
+                    return HttpResponse('Error al generar PDF', status=500)
+                
+                return response
+                
+            except Aula.DoesNotExist:
+                return JsonResponse({'ok': False, 'msg': 'Aula no encontrada'})
+            except Exception as e:
+                import traceback
+                print(f"ERROR PDF: {str(e)}")
+                print(traceback.format_exc())
+                return JsonResponse({'ok': False, 'msg': f'Error al generar PDF: {str(e)}'})
+
+    # ======================================================================
+    # 2. LÓGICA GET (RENDERIZADO DE LA PÁGINA INICIAL)
+    # ======================================================================
+    
+    # Obtener todas las aulas ordenadas
+    aulas = Aula.objects.all().order_by('id')
+    
+    # Definir horas del horario por defecto (para mostrar estructura inicial)
+    horas = []
+    hora_actual = datetime.strptime('07:00', '%H:%M')
+    hora_final = datetime.strptime('21:00', '%H:%M')
+    
+    while hora_actual < hora_final:
+        hora_str = hora_actual.strftime('%H:%M')
+        hora_siguiente = hora_actual + timedelta(hours=1)
+        horas.append(f"{hora_str} - {hora_siguiente.strftime('%H:%M')}")
+        hora_actual = hora_siguiente
+    
+    # Días de la semana
+    dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+    
+    # Fecha actual para mostrar en la página
+    from django.utils import timezone
+    semana_actual = timezone.now()
+    
+    contexto = {
+        'perfil': perfil_obj.perfil, 
+        'titulo': 'Visualización de Horarios por Aula',
+        'aulas': aulas,
+        'horas': horas,
+        'dias': dias,
+        'curso_colores': {},
+        'aula_seleccionada': None,
+        'semana_actual': semana_actual
+    }
+    
+    return render(request, 'usuarios/admin/ver_horarios_clases_admin.html', contexto)
+
+def gestion_laboratorios_admin(request):
+    perfil_obj, response = check_administrador_auth(request)
+    if response: 
+        return response
+
+    # ======================================================================
+    # 1. MANEJO DE SOLICITUDES AJAX (GET)
+    # ======================================================================
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' and request.method == 'GET':
+        accion = request.GET.get('accion')
+        
+        # A. Obtener lista de cursos que tienen grupos de teoría (requisito para laboratorios)
+        if accion == 'obtener_cursos_con_teoria':
+            # Filtramos cursos que tienen al menos un grupo de teoría
+            cursos_con_teoria = Curso.objects.filter(
+                grupocurso__grupoteoria__isnull=False
+            ).distinct().order_by('id')
+            
+            data = [{'id': c.id, 'nombre': c.nombre} for c in cursos_con_teoria]
+            return JsonResponse({'cursos': data})
+        
+        # B. Obtener grupos de teoría de un curso específico
+        if accion == 'obtener_grupos_teoria_curso':
+            curso_id = request.GET.get('curso_id')
+            # Solo grupos de teoría
+            grupos = GrupoTeoria.objects.filter(grupo_curso__curso_id=curso_id).select_related('grupo_curso')
+            data = [{'id': g.grupo_curso.id, 'grupo': g.grupo_curso.grupo} for g in grupos]
+            return JsonResponse({'grupos_teoria': data})
+
+        # C. Obtener lista de laboratorios de un curso específico
+        if accion == 'obtener_laboratorios_curso':
+            curso_id = request.GET.get('curso_id')
+            # Filtramos solo grupos de laboratorio
+            laboratorios = GrupoLaboratorio.objects.filter(
+                grupo_curso__curso_id=curso_id
+            ).select_related('grupo_curso')
+            data = [{'id': g.grupo_curso.id, 'grupo': g.grupo_curso.grupo} for g in laboratorios]
+            return JsonResponse({'laboratorios': data})
+
+        # D. Obtener el detalle completo de un laboratorio específico
+        if accion == 'obtener_detalle_laboratorio':
+            laboratorio_id = request.GET.get('laboratorio_id')
+            try:
+                # Buscamos el GrupoCurso (que es la base)
+                grupo_curso = GrupoCurso.objects.select_related('profesor__perfil').get(id=laboratorio_id)
+                
+                # Verificar que sea un laboratorio
+                try:
+                    grupo_lab = GrupoLaboratorio.objects.get(grupo_curso=grupo_curso)
+                except GrupoLaboratorio.DoesNotExist:
+                    return JsonResponse({'ok': False, 'msg': 'No es un laboratorio válido'})
+                
+                # Obtenemos sus bloques horarios
+                bloques = BloqueHorario.objects.filter(grupo_curso=grupo_curso).select_related('aula')
+                horarios = [{
+                    'dia': b.dia,
+                    'inicio': b.horaInicio.strftime('%H:%M:%S') if b.horaInicio else '',
+                    'fin': b.horaFin.strftime('%H:%M:%S') if b.horaFin else '',
+                    'aula_id': b.aula.id if b.aula else ''
+                } for b in bloques]
+
+                data = {
+                    'id': grupo_curso.id,
+                    'profesor_id': grupo_curso.profesor.perfil.id if grupo_curso.profesor else '',
+                    'capacidad': grupo_curso.capacidad,
+                    'horarios': horarios
+                }
+                return JsonResponse({'ok': True, 'data': data})
+            except GrupoCurso.DoesNotExist:
+                return JsonResponse({'ok': False, 'msg': 'Laboratorio no encontrado'})
+            except Exception as e:
+                return JsonResponse({'ok': False, 'msg': f'Error al obtener detalle: {str(e)}'})
+
+        return JsonResponse({'ok': False, 'msg': 'Acción desconocida'})
+
+    # ======================================================================
+    # 2. MANEJO DE SOLICITUDES POST (CRUD)
+    # ======================================================================
+    if request.method == 'POST':
+        accion = request.POST.get('accion')
+        
+        try:
+            with transaction.atomic():
+                
+                # --- A. CREAR LABORATORIO ---
+                if accion == 'crear_laboratorio':
+                    curso_id = request.POST.get('curso_id')
+                    grupo_teoria_id = request.POST.get('grupo_teoria_id')  # Grupo teoría asociado
+                    letra_grupo = request.POST.get('grupo', '').upper()  # Letra para el laboratorio
+                    profesor_id = request.POST.get('profesor_id')
+                    capacidad = request.POST.get('capacidad')
+                    horarios_json = request.POST.get('horarios_json', '[]')
+                    
+                    print(f"DEBUG - horarios_json recibido: {horarios_json}")
+                    
+                    # Verificar que el grupo de teoría exista
+                    try:
+                        grupo_teoria = GrupoTeoria.objects.get(grupo_curso_id=grupo_teoria_id)
+                    except GrupoTeoria.DoesNotExist:
+                        messages.error(request, f"El grupo de teoría {grupo_teoria_id} no existe.")
+                        return redirect('usuarios:gestion_laboratorios_admin')
+                    
+                    # Generación del ID Compuesto: "L" + CURSOID + LETRA
+                    nuevo_id = f"L{curso_id}{letra_grupo}"
+                    
+                    if GrupoCurso.objects.filter(id=nuevo_id).exists():
+                        messages.error(request, f"El Laboratorio {letra_grupo} para este curso ya existe (ID: {nuevo_id}).")
+                    else:
+                        try:
+                            # Validar horarios_json
+                            if not horarios_json or horarios_json.strip() == '':
+                                raise ValueError("No se recibieron datos de horarios. Por favor agregue al menos un horario.")
+                            
+                            # 1. Parsear JSON
+                            horarios = json.loads(horarios_json)
+                            
+                            # Validar que haya al menos un horario
+                            if not isinstance(horarios, list) or len(horarios) == 0:
+                                raise ValueError("Debe agregar al menos un bloque de horario.")
+                            
+                            # 2. Iniciar Transacción Atómica
+                            with transaction.atomic():
+                                # Validación de existencia de objetos FK y conversión de capacidad
+                                profesor = Profesor.objects.get(perfil__id=profesor_id) if profesor_id else None
+                                curso = Curso.objects.get(id=curso_id)
+                                capacidad_int = int(capacidad)
+                                
+                                # Verificar que el profesor sea de laboratorio
+                                if profesor and not profesor.es_lab:
+                                    raise ValueError(f"El profesor {profesor.perfil.nombre} no está habilitado para laboratorios.")
+                                
+                                # 3. Validar cada horario
+                                for i, h in enumerate(horarios, 1):
+                                    try:
+                                        aula_obj = Aula.objects.get(id=h['aula_id'])
+                                    except ObjectDoesNotExist:
+                                        raise ValueError(f"El aula con ID '{h['aula_id']}' no existe.")
+                                    
+                                    # Validar que el aula sea de tipo laboratorio
+                                    if aula_obj.tipo != 'LABORATORIO':
+                                        raise ValueError(f"El aula {aula_obj.id} no es un laboratorio. Solo se pueden usar aulas tipo LABORATORIO.")
+                                    
+                                    # Validar campos requeridos
+                                    if not h.get('dia') or not h.get('inicio') or not h.get('fin'):
+                                        raise ValueError(f"El horario {i} tiene campos incompletos.")
+                                    
+                                    # Convertir tiempos
+                                    try:
+                                        inicio_time = datetime.strptime(h['inicio'], '%H:%M:%S').time()
+                                        fin_time = datetime.strptime(h['fin'], '%H:%M:%S').time()
+                                    except ValueError:
+                                        raise ValueError(f"Formato de hora inválido en horario {i}. Use HH:MM:SS")
+                                    
+                                    # Validar que inicio < fin
+                                    if inicio_time >= fin_time:
+                                        raise ValueError(f"El horario {i} tiene hora de inicio ({h['inicio']}) mayor o igual a la hora de fin ({h['fin']}).")
+                                    
+                                    # 3.1 Verificar cruce con horarios existentes en la misma aula
+                                    horarios_cruzados_aula = BloqueHorario.objects.filter(
+                                        aula=aula_obj,
+                                        dia=h['dia']
+                                    ).exclude(
+                                        Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                    )
+                                    
+                                    if horarios_cruzados_aula.exists():
+                                        conflicto = horarios_cruzados_aula.first()
+                                        curso_conflicto = conflicto.grupo_curso.curso.nombre
+                                        grupo_conflicto = conflicto.grupo_curso.grupo
+                                        raise ValueError(
+                                            f"Conflicto de horario en laboratorio {aula_obj.id} el día {h['dia']} de {h['inicio']} a {h['fin']}. "
+                                            f"Ya existe la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en ese horario."
+                                        )
+                                    
+                                    # 3.2 Verificar disponibilidad del docente (si se asignó un profesor)
+                                    if profesor:
+                                        # Buscar horarios donde el docente ya tenga clases asignadas
+                                        horarios_docente = BloqueHorario.objects.filter(
+                                            grupo_curso__profesor=profesor,
+                                            dia=h['dia']
+                                        ).exclude(
+                                            Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                        )
+                                        
+                                        if horarios_docente.exists():
+                                            conflicto_docente = horarios_docente.first()
+                                            curso_conflicto = conflicto_docente.grupo_curso.curso.nombre
+                                            grupo_conflicto = conflicto_docente.grupo_curso.grupo
+                                            aula_conflicto = conflicto_docente.aula.id
+                                            raise ValueError(
+                                                f"El profesor {profesor.perfil.nombre} ya tiene clase asignada el día {h['dia']} entre {h['inicio']} a {h['fin']}. "
+                                                f"Está asignado a la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en el aula {aula_conflicto} en ese horario."
+                                            )
+
+                                # 4. Crear el GrupoCurso base
+                                nuevo_grupo = GrupoCurso.objects.create(
+                                    id=nuevo_id,
+                                    curso=curso,
+                                    profesor=profesor,
+                                    grupo=letra_grupo,
+                                    capacidad=capacidad_int
+                                )
+                                
+                                # 5. Crear la especialización GrupoLaboratorio
+                                GrupoLaboratorio.objects.create(grupo_curso=nuevo_grupo)
+                                
+                                # 6. Crear los Bloques de Horario
+                                for h in horarios:
+                                    aula_obj = Aula.objects.get(id=h['aula_id'])
+                                    BloqueHorario.objects.create(
+                                        dia=h['dia'],
+                                        horaInicio=h['inicio'],
+                                        horaFin=h['fin'],
+                                        grupo_curso=nuevo_grupo,
+                                        aula=aula_obj
+                                    )
+                            
+                            messages.success(request, f"Laboratorio {letra_grupo} creado exitosamente.")
+
+                        except ObjectDoesNotExist as e:
+                            messages.error(request, f"Error de referencia: {str(e)}")
+                        except ValueError as e:
+                            messages.error(request, f"Error en los datos: {str(e)}")
+                        except json.JSONDecodeError as e:
+                            messages.error(request, f"Error en el formato de los horarios (JSON inválido): {str(e)}")
+                        except Exception as e:
+                            messages.error(request, f"Error inesperado al crear el laboratorio: {str(e)}")
+
+                # --- B. EDITAR LABORATORIO ---
+                elif accion == 'editar_laboratorio':
+                    laboratorio_id = request.POST.get('laboratorio_id')  # ID completo (Ej: INF101AL)
+                    profesor_id = request.POST.get('profesor_id')
+                    capacidad = request.POST.get('capacidad')
+                    horarios_json = request.POST.get('horarios_json', '[]')
+                    
+                    # 1. Recuperar GrupoCurso o lanzar 404 si no existe
+                    grupo_curso = get_object_or_404(GrupoCurso, id=laboratorio_id)
+                    
+                    # Verificar que sea un laboratorio
+                    try:
+                        grupo_lab = GrupoLaboratorio.objects.get(grupo_curso=grupo_curso)
+                    except GrupoLaboratorio.DoesNotExist:
+                        messages.error(request, "El grupo seleccionado no es un laboratorio.")
+                        return redirect('usuarios:gestion_laboratorios_admin')
+                    
+                    try:
+                        # Validar horarios_json
+                        if not horarios_json or horarios_json.strip() == '':
+                            raise ValueError("No se recibieron datos de horarios. Por favor agregue al menos un horario.")
+                        
+                        # Parsear JSON
+                        horarios = json.loads(horarios_json)
+                        
+                        # Validar que haya al menos un horario
+                        if not isinstance(horarios, list) or len(horarios) == 0:
+                            raise ValueError("Debe agregar al menos un bloque de horario.")
+                        
+                        # 2. Iniciar Transacción Atómica
+                        with transaction.atomic():
+                            # Validación de existencia de objetos FK y conversión de capacidad
+                            profesor = Profesor.objects.get(perfil__id=profesor_id) if profesor_id else None
+                            capacidad_int = int(capacidad)
+                            
+                            # Verificar que el profesor sea de laboratorio
+                            if profesor and not profesor.es_lab:
+                                raise ValueError(f"El profesor {profesor.perfil.nombre} no está habilitado para laboratorios.")
+                            
+                            # 3. Validar cada horario antes de eliminar los existentes
+                            for i, h in enumerate(horarios, 1):
+                                try:
+                                    aula_obj = Aula.objects.get(id=h['aula_id'])
+                                except ObjectDoesNotExist:
+                                    raise ValueError(f"El aula con ID '{h['aula_id']}' no existe.")
+                                
+                                # Validar que el aula sea de tipo laboratorio
+                                if aula_obj.tipo != 'LABORATORIO':
+                                    raise ValueError(f"El aula {aula_obj.id} no es un laboratorio. Solo se pueden usar aulas tipo LABORATORIO.")
+                                
+                                # Validar campos requeridos
+                                if not h.get('dia') or not h.get('inicio') or not h.get('fin'):
+                                    raise ValueError(f"El horario {i} tiene campos incompletos.")
+                                
+                                # Convertir tiempos
+                                try:
+                                    inicio_time = datetime.strptime(h['inicio'], '%H:%M:%S').time()
+                                    fin_time = datetime.strptime(h['fin'], '%H:%M:%S').time()
+                                except ValueError:
+                                    raise ValueError(f"Formato de hora inválido en horario {i}. Use HH:MM:SS")
+                                
+                                # Validar que inicio < fin
+                                if inicio_time >= fin_time:
+                                    raise ValueError(f"El horario {i} tiene hora de inicio ({h['inicio']}) mayor o igual a la hora de fin ({h['fin']}).")
+                                
+                                # 3.1 Verificar cruce con horarios existentes en la misma aula
+                                # Excluir los horarios del laboratorio actual que estamos editando
+                                horarios_cruzados_aula = BloqueHorario.objects.filter(
+                                    aula=aula_obj,
+                                    dia=h['dia']
+                                ).exclude(
+                                    grupo_curso=grupo_curso  # Excluir los horarios del laboratorio actual
+                                ).exclude(
+                                    Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                )
+                                
+                                if horarios_cruzados_aula.exists():
+                                    conflicto = horarios_cruzados_aula.first()
+                                    curso_conflicto = conflicto.grupo_curso.curso.nombre
+                                    grupo_conflicto = conflicto.grupo_curso.grupo
+                                    raise ValueError(
+                                        f"Conflicto de horario en laboratorio {aula_obj.id} el día {h['dia']} de {h['inicio']} a {h['fin']}. "
+                                        f"Ya existe la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en ese horario."
+                                    )
+                                
+                                # 3.2 Verificar disponibilidad del docente (si se asignó un profesor)
+                                if profesor:
+                                    # Buscar horarios donde el docente ya tenga clases asignadas
+                                    # Excluir los horarios del laboratorio actual que estamos editando
+                                    horarios_docente = BloqueHorario.objects.filter(
+                                        grupo_curso__profesor=profesor,
+                                        dia=h['dia']
+                                    ).exclude(
+                                        grupo_curso=grupo_curso  # Excluir los horarios del laboratorio actual
+                                    ).exclude(
+                                        Q(horaFin__lte=inicio_time) | Q(horaInicio__gte=fin_time)
+                                    )
+                                    
+                                    if horarios_docente.exists():
+                                        conflicto_docente = horarios_docente.first()
+                                        curso_conflicto = conflicto_docente.grupo_curso.curso.nombre
+                                        grupo_conflicto = conflicto_docente.grupo_curso.grupo
+                                        aula_conflicto = conflicto_docente.aula.id
+                                        raise ValueError(
+                                            f"El profesor {profesor.perfil.nombre} ya tiene clase asignada el día {h['dia']} entre {h['inicio']} a {h['fin']}. "
+                                            f"Está asignado a la clase '{curso_conflicto}' (Grupo {grupo_conflicto}) en el aula {aula_conflicto} en ese horario."
+                                        )
+
+                            # 4. Actualizar datos básicos
+                            grupo_curso.profesor = profesor
+                            grupo_curso.capacidad = capacidad_int
+                            grupo_curso.save()
+                            
+                            # 5. Actualizar horarios: Estrategia de reemplazo total (Borrar y crear)
+                            BloqueHorario.objects.filter(grupo_curso=grupo_curso).delete()
+                            
+                            for h in horarios:
+                                aula_obj = Aula.objects.get(id=h['aula_id'])
+                                BloqueHorario.objects.create(
+                                    dia=h['dia'],
+                                    horaInicio=h['inicio'],
+                                    horaFin=h['fin'],
+                                    grupo_curso=grupo_curso,
+                                    aula=aula_obj
+                                )
+                        
+                        messages.success(request, "Laboratorio actualizado correctamente.")
+                    
+                    except ObjectDoesNotExist as e:
+                        messages.error(request, f"Error de referencia: {str(e)}")
+                    except ValueError as e:
+                        messages.error(request, f"Error en los datos proporcionados: {str(e)}")
+                    except json.JSONDecodeError as e:
+                        messages.error(request, f"Error en el formato de los horarios (JSON inválido): {str(e)}")
+                    except Exception as e:
+                        messages.error(request, f"Error inesperado al actualizar el laboratorio: {str(e)}")
+
+                # --- C. ELIMINAR LABORATORIO ---
+                elif accion == 'eliminar_laboratorio':
+                    laboratorio_id = request.POST.get('laboratorio_id')
+                    # Verificar que sea un laboratorio
+                    try:
+                        grupo_lab = GrupoLaboratorio.objects.get(grupo_curso_id=laboratorio_id)
+                        # Al eliminar GrupoCurso, el CASCADE elimina GrupoLaboratorio y BloqueHorario
+                        GrupoCurso.objects.filter(id=laboratorio_id).delete()
+                        messages.success(request, "Laboratorio eliminado correctamente.")
+                    except GrupoLaboratorio.DoesNotExist:
+                        messages.error(request, "El grupo seleccionado no es un laboratorio.")
+
+        except IntegrityError as e:
+            messages.error(request, f"Error de integridad en la base de datos: {str(e)}")
+        except Exception as e:
+            messages.error(request, f"Ocurrió un error inesperado: {str(e)}")
+            
+        return redirect('usuarios:gestion_laboratorios_admin')
+
+    # ======================================================================
+    # 3. LÓGICA GET (RENDERIZADO DE LA PÁGINA)
+    # ======================================================================
+    
+    # Obtener cursos con laboratorios y sus conteos
+    cursos = Curso.objects.filter(
+        grupocurso__grupolaboratorio__isnull=False
+    ).distinct().annotate(
+        num_laboratorios=Count('grupocurso__grupolaboratorio', distinct=True),
+        num_matriculados=Count('grupocurso__grupolaboratorio__matriculalaboratorio', 
+                               filter=Q(grupocurso__grupolaboratorio__isnull=False), 
+                               distinct=True)
+    ).order_by('id')
+
+    # Listas auxiliares
+    profesores_lab = Profesor.objects.filter(es_lab=True).select_related('perfil').order_by('perfil__nombre')
+    aulas_lab = Aula.objects.filter(tipo='LABORATORIO').order_by('id')
+
+    contexto = {
+        'perfil': perfil_obj.perfil, 
+        'titulo': 'Gestión de Laboratorios',
+        'cursos': cursos,
+        'profesores': profesores_lab,
+        'aulas': aulas_lab
+    }
+    return render(request, 'usuarios/admin/gestion_laboratorios_admin.html', contexto)
+
+def registro_estudiantes_admin(request):
+    # ===========================
+    #   SUBIR CSV
+    # ===========================
+    if request.method == "POST" and "subir_csv" in request.POST:
+        try:
+            file = request.FILES.get("csv_estudiantes")
+
+            if not file:
+                messages.error(request, "Debe seleccionar un archivo CSV.")
+                return redirect("usuarios:registro_estudiantes_admin")
+
+            # Convertimos a texto UTF-8
+            decoded = file.read().decode("utf-8")
+            reader = csv.reader(decoded.splitlines())
+
+            # Formato esperado (sin encabezados):
+            # cui, nombre, email, password
+            for row in reader:
+                if len(row) < 4:
+                    continue
+
+                cui = row[0].strip()
+                nombre = row[1].strip()
+                email = row[2].strip() if row[2].strip() else None
+                password = row[3].strip()
+
+                if not (cui and nombre and password):
+                    continue  # Campos obligatorios
+
+                # Crear o actualizar Perfil
+                perfil, created = Perfil.objects.get_or_create(
+                    id=cui,
+                    defaults={
+                        "nombre": nombre,
+                        "email": email,
+                        "password": password,
+                        "rol": "ESTUDIANTE",
+                        "estadoCuenta": True
+                    }
+                )
+
+                # Si el perfil ya existe, actualizar nombre/email/password si cambian
+                if not created:
+                    perfil.nombre = nombre
+                    perfil.email = email
+                    perfil.password = password
+                    perfil.rol = "ESTUDIANTE"
+                    perfil.estadoCuenta = True
+                    perfil.save()
+
+                # Crear estudiante si no existe
+                Estudiante.objects.get_or_create(perfil=perfil)
+
+            messages.success(request, "CSV procesado correctamente.")
+
+        except Exception as e:
+            messages.error(request, f"Error procesando CSV: {str(e)}")
+
+        return redirect("usuarios:registro_estudiantes_admin")
+
+    # ===========================
+    #   CREAR ESTUDIANTE MANUAL
+    # ===========================
+    if request.method == "POST" and "crear_estudiante" in request.POST:
+        cui = request.POST.get("cui")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        password = request.POST.get("password")
+
+        # Validación SOLO de los campos reales
+        if not (cui and nombre and password):
+            messages.error(request, "CUI, Nombre y Contraseña son obligatorios.")
+            return redirect("usuarios:registro_estudiantes_admin")
+
+        # Crear Perfil
+        perfil = Perfil.objects.create(
+            id=cui,
+            nombre=nombre,
+            email=email if email else None,
+            password=password,
+            rol="ESTUDIANTE",
+            estadoCuenta=True
+        )
+
+        # Crear Estudiante
+        Estudiante.objects.create(perfil=perfil)
+
+        messages.success(request, "Estudiante creado correctamente.")
+        return redirect("usuarios:registro_estudiantes_admin")
+
+    # ===========================
+    #   EDITAR ESTUDIANTE
+    # ===========================
+    if request.method == "POST" and "editar_estudiante" in request.POST:
+        est_id = request.POST.get("estudiante_id")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        estado = request.POST.get("estadoCuenta")
+        grupo_id = request.POST.get("grupo_curso_id")
+
+        perfil = Perfil.objects.get(id=est_id)
+
+        # Actualizar datos del perfil
+        perfil.nombre = nombre
+        perfil.email = email if email else None
+        perfil.estadoCuenta = (estado == "True")
+        perfil.save()
+
+        # Asignar curso si corresponde
+        if grupo_id:
+            estudiante = Estudiante.objects.get(perfil_id=est_id)
+            grupo = GrupoCurso.objects.get(id=grupo_id)
+
+            Matricula.objects.get_or_create(
+                estudiante=estudiante,
+                grupo_curso=grupo,
+                defaults={"estado": True}
+            )
+
+        messages.success(request, "Estudiante actualizado.")
+        return redirect("usuarios:registro_estudiantes_admin")
+    
+    # =============================
+    #   ELIMINAR ESTUDIANTE
+    # =============================
+    if request.method == "POST" and "eliminar_estudiante" in request.POST:
+        estudiante_id = request.POST.get("estudiante_id")
+
+        try:
+            perfil = Perfil.objects.get(id=estudiante_id)
+
+            # Al eliminar el perfil, se elimina automáticamente el Estudiante
+            # por el OnDelete.CASCADE
+            perfil.delete()
+
+            messages.success(request, "La cuenta del estudiante fue eliminada correctamente.")
+        except Perfil.DoesNotExist:
+            messages.error(request, "El estudiante no existe.")
+
+        return redirect("usuarios:registro_estudiantes_admin")
+
+    # ===========================
+    #     MATRICULAR ESTUDIANTE
+    # ===========================
+    if request.method == "POST" and "asignar_curso" in request.POST:
+
+        estudiante_id = request.POST.get("estudiante_id")
+        grupo_curso_id = request.POST.get("grupo_curso_id")
+
+        try:
+            estudiante = Estudiante.objects.get(pk=estudiante_id)
+            grupo_curso = GrupoCurso.objects.get(pk=grupo_curso_id)
+
+            # Crear la matrícula
+            Matricula.objects.create(
+                estudiante=estudiante,
+                grupo_curso=grupo_curso,
+                estado=True  # Activo por defecto
+            )
+
+            messages.success(request, "Curso asignado correctamente.")
+
+        except Estudiante.DoesNotExist:
+            messages.error(request, "El estudiante no existe.")
+
+        except GrupoCurso.DoesNotExist:
+            messages.error(request, "El grupo del curso no existe.")
+
+        except:
+            messages.error(request, "Este estudiante ya está matriculado en ese grupo.")
+
+        return redirect("usuarios:registro_estudiantes_admin")
+
+    # Activar / Desactivar cuenta
+    if "toggle_estado" in request.POST:
+        perfil = Perfil.objects.get(id=request.POST["estudiante_id"])
+        perfil.estadoCuenta = not perfil.estadoCuenta
+        perfil.save()
+        messages.success(request, "Estado actualizado.")
+        return redirect("usuarios:registro_estudiantes_admin")
+
+    # ===========================
+    #   LISTAR ESTUDIANTES
+    # ===========================
+    estudiantes = Estudiante.objects.select_related("perfil").all()
+    grupos = GrupoCurso.objects.filter(grupoteoria__isnull=False).select_related('curso', 'profesor__perfil').all().order_by("curso__nombre")
+
+    context = {
+        "estudiantes": estudiantes,
+        "grupos": grupos,
+    }
+    return render(request, "usuarios/admin/registro_estudiantes_admin.html", context)
+
+
+def detalle_estudiante_admin(request):
+    perfil_obj, response = check_administrador_auth(request)
+    if response:
+        return response
+
+    cui = request.GET.get('cui') or (
+        request.resolver_match.kwargs.get('cui')
+        if request.resolver_match else None
+    )
+    if not cui:
+        messages.error(request, "No se indicó CUI del estudiante.")
+        return redirect(reverse('usuarios:registro_estudiantes_admin'))
+
+    # Obtener estudiante
+    perfil_estudiante = get_object_or_404(Perfil, pk=cui)
+    estudiante = get_object_or_404(Estudiante, perfil=perfil_estudiante)
+
+    # Matriculas
+    matriculas_qs = Matricula.objects.filter(
+        estudiante=estudiante
+    ).select_related(
+        'grupo_curso__curso',
+        'grupo_curso__profesor__perfil'
+    ).order_by('grupo_curso__curso__nombre')
+
+    # Laboratorios inscritos
+    labs_qs = (
+        MatriculaLaboratorio.objects.filter(estudiante=estudiante)
+        .select_related(
+            "laboratorio__grupo_curso__curso",
+            "laboratorio__grupo_curso__profesor__perfil"
+        )
+    )
+
+    laboratorios = []
+    for mlab in labs_qs:
+        glab = mlab.laboratorio          # GrupoLaboratorio
+        gcurso = glab.grupo_curso        # GrupoCurso asociado
+
+        laboratorios.append({
+            "id": glab.pk,
+            "curso": gcurso.curso.nombre,
+            "curso_id": gcurso.curso.id,
+            "profesor": gcurso.profesor.perfil.nombre if gcurso.profesor else "-",
+            "grupo": gcurso.grupo,
+        })
+
+    matriculas = []
+    grupo_ids = []
+
+    for m in matriculas_qs:
+        matriculas.append({
+            'id': m.id,
+            'grupo': m.grupo_curso,
+            'estado': m.estado,
+        })
+        grupo_ids.append(m.grupo_curso.id)
+
+    # Horarios
+    horarios_map = {}
+    if grupo_ids:
+        bloques = BloqueHorario.objects.filter(
+            grupo_curso__id__in=grupo_ids
+        ).select_related('aula', 'grupo_curso')
+
+        for b in bloques:
+            gid = b.grupo_curso.id
+            horarios_map.setdefault(gid, []).append({
+                'dia': b.dia,
+                'horaInicio': b.horaInicio.strftime("%H:%M"),
+                'horaFin': b.horaFin.strftime("%H:%M"),
+                'aula': getattr(b.aula, 'nombre', getattr(b.aula, 'id', '-'))
+            })
+
+    # Cargar NOTAS desde la tabla Matricula
+    notas_por_curso = {}
+    for m in matriculas_qs:
+        gid = m.grupo_curso.id
+        notas_por_curso[gid] = {
+            'EC1': m.EC1,
+            'EP1': m.EP1,
+            'EC2': m.EC2,
+            'EP2': m.EP2,
+            'EC3': m.EC3,
+            'EP3': m.EP3,
+        }
+
+    # Asistencias
+    asistencias_qs = RegistroAsistenciaDetalle.objects.filter(
+        estudiante=estudiante
+    ).select_related(
+        'registro_asistencia__grupo_curso__curso'
+    ).order_by('-registro_asistencia__fechaClase')[:30]
+
+    asistencias = []
+    total_presentes = 0
+    total_faltas = 0
+
+    for d in asistencias_qs:
+        fecha = d.registro_asistencia.fechaClase.strftime("%Y-%m-%d")
+        grupo = d.registro_asistencia.grupo_curso
+        curso_nombre = grupo.curso.nombre if grupo and grupo.curso else ''
+        estado = d.estado
+
+        if estado == 'PRESENTE':
+            total_presentes += 1
+        else:
+            total_faltas += 1
+
+        asistencias.append({
+            'fecha': fecha,
+            'grupo_id': grupo.id if grupo else '',
+            'curso_nombre': curso_nombre,
+            'estado': estado
+        })
+
+    resumen = {
+        'total_matriculas': matriculas_qs.count(),
+        'total_presentes': total_presentes,
+        'total_faltas': total_faltas
+    }
+
+    contexto = {
+        'perfil': perfil_obj,
+        'titulo': f'Perfil Estudiante - {perfil_estudiante.nombre}',
+        'perfil_estudiante': perfil_estudiante,
+        'estudiante': estudiante,
+        'matriculas': [{'grupo': m['grupo'], 'estado': m['estado']} for m in matriculas],
+        'horarios_by_group': {'mat_map': horarios_map},
+        'notas_por_curso': notas_por_curso,
+        'laboratorios': laboratorios,
+        'asistencias': asistencias,
+        'resumen': resumen,
+    }
+
+    return render(request, 'usuarios/admin/detalle_estudiante_admin.html', contexto)
+
+def detalle_profesor_admin(request):
+    perfil_obj, response = check_administrador_auth(request)
+    if response:
+        return response
+
+    codigo = request.GET.get("codigo") or (
+        request.resolver_match.kwargs.get("codigo")
+        if request.resolver_match else None
+    )
+    if not codigo:
+        messages.error(request, "No se indicó Código del profesor.")
+        return redirect(reverse("usuarios:registro_profesores_admin"))
+
+    # ================================
+    #   1. Obtener profesor
+    # ================================
+    perfil_prof = get_object_or_404(Perfil, pk=codigo)
+    profesor = get_object_or_404(Profesor, perfil=perfil_prof)
+
+    # ================================
+    #   2. Obtener sus grupos asignados
+    # ================================
+    grupos_qs = (
+        GrupoCurso.objects.filter(profesor=profesor)
+        .select_related("curso", "profesor__perfil")
+        .order_by("curso__nombre")
+    )
+
+    # Determinar qué grupos son teoría
+    grupos_teoria_ids = set(
+        GrupoTeoria.objects.filter(grupo_curso__in=grupos_qs)
+        .values_list("grupo_curso_id", flat=True)
+    )
+
+    # ================================
+    #   3. Horarios por cada grupo
+    # ================================
+    horarios_map = {}
+    if grupos_qs:
+        bloques = (
+            BloqueHorario.objects.filter(grupo_curso__in=grupos_qs)
+            .select_related("aula", "grupo_curso")
+        )
+        for b in bloques:
+            gid = b.grupo_curso.id
+            horarios_map.setdefault(gid, []).append({
+                "dia": b.dia,
+                "horaInicio": b.horaInicio.strftime("%H:%M"),
+                "horaFin": b.horaFin.strftime("%H:%M"),
+                "aula": getattr(b.aula, "nombre", getattr(b.aula, "id", "-")),
+            })
+
+    # ================================
+    #   4. Temas (solo para teoría)
+    # ================================
+    temas_map = {}
+    teoria_ids = list(grupos_teoria_ids)
+
+    if teoria_ids:
+        temas_qs = (
+            TemaCurso.objects.filter(grupo_teoria_id__in=teoria_ids)
+            .order_by("orden")
+        )
+        for t in temas_qs:
+            temas_map.setdefault(t.grupo_teoria_id, []).append({
+                "orden": t.orden,
+                "nombre": t.nombre,
+                "fecha": t.fecha.strftime("%Y-%m-%d") if t.fecha else "-",
+                "completado": t.completado,
+            })
+
+    # ================================
+    #   5. Reservas del profesor
+    # ================================
+    reservas_qs = (
+        Reserva.objects
+        .filter(profesor=profesor)
+        .select_related("aula")
+        .order_by("-fecha_reserva")
+    )
+
+    reservas = []
+
+    for r in reservas_qs:
+        reservas.append({
+            "fecha_reserva": r.fecha_reserva.strftime("%Y-%m-%d"),
+            "hora_inicio": r.hora_inicio.strftime("%H:%M"),
+            "hora_fin": r.hora_fin.strftime("%H:%M"),
+            "aula_id": r.aula.id,
+            "aula_tipo": r.aula.get_tipo_display(),
+        })
+
+    # ================================
+    #   6. Asistencias tomadas
+    # ================================
+    grupos_ids = GrupoCurso.objects.filter(profesor=profesor).values_list('id', flat=True)
+
+    asistencias_qs = RegistroAsistencia.objects.filter(
+        grupo_curso__id__in=grupos_ids
+    ).select_related('grupo_curso__curso').order_by('-fechaClase')[:30]
+
+    asistencias = [{
+        'fechaClase': r.fechaClase.strftime("%Y-%m-%d"),
+        'horaInicioVentana': r.horaInicioVentana.strftime("%H:%M"),
+        'grupo_curso': r.grupo_curso,
+        'ipProfesor': r.ipProfesor
+    } for r in asistencias_qs]
+
+    # ================================
+    #   7. Resumen
+    # ================================
+    resumen = {
+        "total_cursos": grupos_qs.count(),
+        "total_reservas": reservas_qs.count(),
+        "total_asistencias": asistencias_qs.count(),
+    }
+
+    # ================================
+    #   8. Contexto final
+    # ================================
+    contexto = {
+        "perfil": perfil_obj,
+        "profesor": profesor,
+        "grupos": grupos_qs,
+        "grupos_teoria_ids": grupos_teoria_ids,
+        "horarios": horarios_map,
+        "temas": temas_map,
+        "reservas": reservas,
+        "asistencias": asistencias,
+        "resumen": resumen,
+        "titulo": f"Perfil Profesor - {profesor.perfil.nombre}",
+    }
+
+    return render(request, "usuarios/admin/detalle_profesor_admin.html", contexto)
+
+def registro_profesores_admin(request):
+    # ===========================
+    #   SUBIR CSV
+    # ===========================
+    if request.method == "POST" and "subir_csv" in request.POST:
+        try:
+            file = request.FILES.get("csv_profesores")
+
+            if not file:
+                messages.error(request, "Debe seleccionar un archivo CSV.")
+                return redirect("usuarios:registro_profesores_admin")
+
+            decoded = file.read().decode("utf-8")
+            reader = csv.reader(decoded.splitlines())
+
+            # Formato esperado:
+            # cui, nombre, email, password
+            for row in reader:
+                if len(row) < 4:
+                    continue
+
+                codigo = row[0].strip()
+                nombre = row[1].strip()
+                email = row[2].strip() or None
+                password = row[3].strip()
+
+                if not (codigo and nombre and password):
+                    continue
+
+                perfil, created = Perfil.objects.get_or_create(
+                    id=codigo,
+                    defaults={
+                        "nombre": nombre,
+                        "email": email,
+                        "password": password,
+                        "rol": "PROFESOR",
+                        "estadoCuenta": True
+                    }
+                )
+
+                if not created:
+                    perfil.nombre = nombre
+                    perfil.email = email
+                    perfil.password = password
+                    perfil.rol = "PROFESOR"
+                    perfil.estadoCuenta = True
+                    perfil.save()
+
+                Profesor.objects.get_or_create(perfil=perfil)
+
+            messages.success(request, "CSV procesado correctamente.")
+
+        except Exception as e:
+            messages.error(request, f"Error procesando CSV: {str(e)}")
+
+        return redirect("usuarios:registro_profesores_admin")
+
+    # ===========================
+    #   CREAR PROFESOR MANUAL
+    # ===========================
+    if request.method == "POST" and "crear_profesor" in request.POST:
+
+        codigo = request.POST.get("cui")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        password = request.POST.get("password")
+
+        if not (codigo and nombre and password):
+            messages.error(request, "Código, Nombre y Contraseña son obligatorios.")
+            return redirect("usuarios:registro_profesores_admin")
+
+        perfil = Perfil.objects.create(
+            id=codigo,
+            nombre=nombre,
+            email=email or None,
+            password=password,
+            rol="PROFESOR",
+            estadoCuenta=True
+        )
+
+        Profesor.objects.create(perfil=perfil)
+
+        messages.success(request, "Profesor creado correctamente.")
+        return redirect("usuarios:registro_profesores_admin")
+
+    # ===========================
+    #   EDITAR PROFESOR
+    # ===========================
+    if request.method == "POST" and "editar_profesor" in request.POST:
+
+        profesor_id = request.POST.get("profesor_id")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        estado = request.POST.get("estadoCuenta")
+        asignar_grupo_id = request.POST.get("grupo_curso_id")
+        tipo_clase = request.POST.get("tipo_clase")
+
+        profe = Profesor.objects.get(perfil__id=profesor_id)
+        if tipo_clase == "ambos":
+            profe.es_teoria = True
+            profe.es_lab = True
+        elif tipo_clase == "teoria":
+            profe.es_teoria = True
+            profe.es_lab = False
+        elif tipo_clase == "laboratorio":
+            profe.es_teoria = False
+            profe.es_lab = True
+        
+        profe.save()
+
+        perfil = Perfil.objects.get(id=profesor_id)
+
+        perfil.nombre = nombre
+        perfil.email = email or None
+        perfil.estadoCuenta = (estado == "True")
+        perfil.save()
+
+        if asignar_grupo_id:
+            grupo = GrupoCurso.objects.get(id=asignar_grupo_id)
+            grupo.profesor = profe
+            grupo.save()
+
+        messages.success(request, "Profesor actualizado correctamente.")
+        return redirect("usuarios:registro_profesores_admin")
+
+    # ===========================
+    #   ELIMINAR PROFESOR
+    # ===========================
+    if request.method == "POST" and "eliminar_profesor" in request.POST:
+
+        profesor_id = request.POST.get("profesor_id")
+
+        try:
+            perfil = Perfil.objects.get(id=profesor_id)
+            perfil.delete()
+            messages.success(request, "La cuenta del profesor fue eliminada.")
+        except Perfil.DoesNotExist:
+            messages.error(request, "El profesor no existe.")
+
+        return redirect("usuarios:registro_profesores_admin")
+
+    # ===========================
+    #   ACTIVAR / DESACTIVAR
+    # ===========================
+    if "toggle_estado" in request.POST:
+
+        perfil = Perfil.objects.get(id=request.POST["profesor_id"])
+        perfil.estadoCuenta = not perfil.estadoCuenta
+        perfil.save()
+        messages.success(request, "Estado actualizado.")
+        return redirect("usuarios:registro_profesores_admin")
+
+    # ===========================
+    #   LISTAR PROFESORES
+    # ===========================
+    profesores = Profesor.objects.select_related("perfil").all().order_by("perfil__nombre")
+    grupos_disponibles = GrupoCurso.objects.filter(profesor__isnull=True).filter(Q(grupoteoria__isnull=False) | Q(grupolaboratorio__isnull=False)).select_related("curso").order_by("curso__nombre", "grupo")
+
+    return render(request, "usuarios/admin/registro_profesores_admin.html", {
+        "profesores": profesores,   
+        "grupos_disponibles_profesor": grupos_disponibles,
+    })
+
+def registro_secretarias(request):
+    # ===========================
+    #   SUBIR CSV
+    # ===========================
+    if request.method == "POST" and "subir_csv" in request.POST:
+        try:
+            file = request.FILES.get("csv_secretarias")
+
+            if not file:
+                messages.error(request, "Debe seleccionar un archivo CSV.")
+                return redirect("usuarios:registro_secretarias")
+
+            # Convertimos a texto UTF-8
+            decoded = file.read().decode("utf-8")
+            reader = csv.reader(decoded.splitlines())
+
+            # Formato esperado (sin encabezados):
+            # id, nombre, email, password
+            for row in reader:
+                if len(row) < 4:
+                    continue
+
+                secretaria_id = row[0].strip()
+                nombre = row[1].strip()
+                email = row[2].strip() if row[2].strip() else None
+                password = row[3].strip()
+
+                if not (secretaria_id and nombre and password):
+                    continue  # Campos obligatorios
+
+                # Crear o actualizar Perfil
+                perfil, created = Perfil.objects.get_or_create(
+                    id=secretaria_id,
+                    defaults={
+                        "nombre": nombre,
+                        "email": email,
+                        "password": password,
+                        "rol": "SECRETARIA",
+                        "estadoCuenta": True
+                    }
+                )
+
+                # Si el perfil ya existe, actualizar nombre/email/password si cambian
+                if not created:
+                    perfil.nombre = nombre
+                    perfil.email = email
+                    perfil.password = password
+                    perfil.rol = "SECRETARIA"
+                    perfil.estadoCuenta = True
+                    perfil.save()
+
+                # Crear secretaria si no existe
+                Secretaria.objects.get_or_create(perfil=perfil)
+
+            messages.success(request, "CSV procesado correctamente.")
+
+        except Exception as e:
+            messages.error(request, f"Error procesando CSV: {str(e)}")
+
+        return redirect("usuarios:registro_secretarias")
+
+    # ===========================
+    #   CREAR SECRETARIA MANUAL
+    # ===========================
+    if request.method == "POST" and "crear_secretaria" in request.POST:
+        secretaria_id = request.POST.get("secretaria_id")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        password = request.POST.get("password")
+
+        # Validación SOLO de los campos reales
+        if not (secretaria_id and nombre and password):
+            messages.error(request, "ID, Nombre y Contraseña son obligatorios.")
+            return redirect("usuarios:registro_secretarias")
+
+        # Verificar si ya existe un perfil con este ID
+        if Perfil.objects.filter(id=secretaria_id).exists():
+            messages.error(request, "Ya existe un usuario con este ID.")
+            return redirect("usuarios:registro_secretarias")
+
+        # Verificar email único si se proporciona
+        if email and Perfil.objects.filter(email=email).exists():
+            messages.error(request, "El email ya está registrado.")
+            return redirect("usuarios:registro_secretarias")
+
+        # Crear Perfil
+        perfil = Perfil.objects.create(
+            id=secretaria_id,
+            nombre=nombre,
+            email=email if email else None,
+            password=password,
+            rol="SECRETARIA",
+            estadoCuenta=True
+        )
+
+        # Crear Secretaria
+        Secretaria.objects.create(perfil=perfil)
+
+        messages.success(request, "Secretaria creada correctamente.")
+        return redirect("usuarios:registro_secretarias")
+
+    # ===========================
+    #   EDITAR SECRETARIA
+    # ===========================
+    if request.method == "POST" and "editar_secretaria" in request.POST:
+        secretaria_id = request.POST.get("secretaria_id")
+        nombre = request.POST.get("nombre")
+        email = request.POST.get("email")
+        estado = request.POST.get("estadoCuenta")
+
+        try:
+            perfil = Perfil.objects.get(id=secretaria_id, rol="SECRETARIA")
+            
+            # Verificar email único si se cambia
+            if email and email != perfil.email:
+                if Perfil.objects.filter(email=email).exclude(id=secretaria_id).exists():
+                    messages.error(request, "El email ya está registrado por otro usuario.")
+                    return redirect("usuarios:registro_secretarias")
+
+            # Actualizar datos del perfil
+            perfil.nombre = nombre
+            perfil.email = email if email else None
+            perfil.estadoCuenta = (estado == "True")
+            perfil.save()
+
+            messages.success(request, "Secretaria actualizada correctamente.")
+            
+        except Perfil.DoesNotExist:
+            messages.error(request, "La secretaria no existe.")
+        except Exception as e:
+            messages.error(request, f"Error al actualizar la secretaria: {str(e)}")
+
+        return redirect("usuarios:registro_secretarias")
+    
+    # =============================
+    #   ELIMINAR SECRETARIA
+    # =============================
+    if request.method == "POST" and "eliminar_secretaria" in request.POST:
+        secretaria_id = request.POST.get("secretaria_id")
+
+        try:
+            perfil = Perfil.objects.get(id=secretaria_id, rol="SECRETARIA")
+
+            # Al eliminar el perfil, se elimina automáticamente la Secretaria
+            # por el OnDelete.CASCADE
+            perfil.delete()
+
+            messages.success(request, "La secretaria fue eliminada correctamente.")
+        except Perfil.DoesNotExist:
+            messages.error(request, "La secretaria no existe.")
+        except Exception as e:
+            messages.error(request, f"Error al eliminar la secretaria: {str(e)}")
+
+        return redirect("usuarios:registro_secretarias")
+
+    # =============================
+    #   ACTIVAR / DESACTIVAR CUENTA
+    # =============================
+    if request.method == "POST" and "toggle_estado" in request.POST:
+        secretaria_id = request.POST.get("secretaria_id")
+        
+        if not secretaria_id:
+            messages.error(request, "ID de secretaria no proporcionado.")
+            return redirect("usuarios:registro_secretarias")
+        
+        try:
+            perfil = Perfil.objects.get(id=secretaria_id, rol="SECRETARIA")
+            perfil.estadoCuenta = not perfil.estadoCuenta
+            perfil.save()
+            
+            estado_texto = "activada" if perfil.estadoCuenta else "desactivada"
+            messages.success(request, f"Secretaria {estado_texto} correctamente.")
+            
+        except Perfil.DoesNotExist:
+            messages.error(request, "La secretaria no existe.")
+        except Exception as e:
+            messages.error(request, f"Error al cambiar el estado: {str(e)}")
+
+        return redirect("usuarios:registro_secretarias")
+
+    # ===========================
+    #   LISTAR SECRETARIAS
+    # ===========================
+    secretarias = Secretaria.objects.select_related("perfil").all().order_by("perfil__nombre")
+
+    context = {
+        "secretarias": secretarias,
+        "titulo": "Gestión de Secretarias"
+    }
+    return render(request, "usuarios/admin/registro_secretarias.html", context)

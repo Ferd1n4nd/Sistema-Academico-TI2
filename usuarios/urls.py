@@ -37,4 +37,15 @@ urlpatterns = [
     path('dashboard/secretaria/detalle-estudiante/', views.detalle_estudiante, name='detalle_estudiante'),
     path('dashboard/secretaria/registro-profesores/', views.registro_profesores, name='registro_profesores'),
     path('dashboard/secretaria/detalle-profesor/', views.detalle_profesor, name='detalle_profesor'),
+
+    path('dashboard/admin/', views.dashboard_admin, name='dashboard_admin'), 
+    path('dashboard/admin/mi-cuenta/', views.mi_cuenta_admin, name='mi_cuenta_admin'),
+    path('dashboard/admin/gestion-cursos/', views.gestion_cursos_admin, name='gestion_cursos_admin'),
+    path('dashboard/admin/ver-horarios/', views.ver_horarios_clases_admin, name='ver_horarios_clases_admin'),
+    path('dashboard/admin/gestion-laboratorios/', views.gestion_laboratorios_admin, name='gestion_laboratorios_admin'),
+    path('dashboard/admin/registro-estudiantes/', views.registro_estudiantes_admin, name='registro_estudiantes_admin'),
+    path('dashboard/admin/detalle-estudiante/', views.detalle_estudiante_admin, name='detalle_estudiante_admin'),
+    path('dashboard/admin/registro-profesores/', views.registro_profesores_admin, name='registro_profesores_admin'),
+    path('dashboard/admin/detalle-profesor/', views.detalle_profesor_admin, name='detalle_profesor_admin'),
+    path('dashboard/admin/registro-secretarias/', views.registro_secretarias, name='registro_secretarias'),
 ]

@@ -1,4 +1,4 @@
-{% extends "usuarios/secretaria/base_secretaria.html" %}
+{% extends "usuarios/admin/base_admin.html" %}
 
 {% block content %}
 
@@ -123,7 +123,7 @@
                         </button>
                     </form>
 
-                    <a href="{% url 'usuarios:detalle_profesor' %}?codigo={{ profesor.perfil.id }}"
+                    <a href="{% url 'usuarios:detalle_profesor_admin' %}?codigo={{ profesor.perfil.id }}"
                        class="btn btn-sm btn-secondary ms-1">
                         <i class="bi bi-card-list"></i> Ver información
                     </a>

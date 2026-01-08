@@ -1,0 +1,666 @@
+{% extends "usuarios/admin/base_admin.html" %}
+
+{% block content %}
+
+    <h4 class="mb-4">Gestión de Laboratorios Académicos</h4>
+    
+    <style>
+        .col-acciones {
+            width: 268px !important;
+        }
+        /* Estilos para formularios burbuja (Modales) */
+        .modal-header { background-color: #6b1616; color: white; }
+        .btn-close { filter: invert(1); }
+        .bg-light-subtle { background-color: #f8f9fa; }
+    </style>
+
+    <!-- BOTON CREAR LABORATORIO (Arriba) -->
+    <div class="row mb-3">
+        <div class="col-md-12 text-end">
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalCrearLaboratorio">
+                <i class="bi bi-plus-circle"></i> Crear Nuevo Laboratorio
+            </button>
+        </div>
+    </div>
+
+    <!-- TABLA LISTA DE CURSOS CON LABORATORIOS -->
+    <div class="table-responsive card shadow-sm">
+        <table class="table table-bordered table-striped table-hover mb-0" id="cursos-table">
+            <thead class="table-dark">
+                <tr>
+                    <th>Código (ID)</th>
+                    <th>Nombre del Curso</th>
+                    <th class="text-center">Laboratorios</th>
+                    <th class="text-center">Matriculados</th>
+                    <th class="text-center col-acciones">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in cursos %}
+                <tr>
+                    <td>{{ c.id }}</td>
+                    <td>{{ c.nombre }}</td>
+                    <td class="text-center">{{ c.num_laboratorios }}</td>
+                    <td class="text-center">{{ c.num_matriculados }}</td>
+                    <td class="col-acciones text-center">
+                        <!-- GESTIONAR LABORATORIOS -->
+                        {% if c.num_laboratorios > 0 %}
+                            <button type="button" class="btn btn-success btn-sm"
+                                data-bs-toggle="modal"
+                                data-bs-target="#modalGestionarLaboratorios"
+                                data-bs-cursoid="{{ c.id }}"
+                            >
+                                <i class="bi bi-gear"></i> Labs ({{ c.num_laboratorios }})
+                            </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" class="text-center text-muted">No hay cursos con laboratorios registrados.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- MODAL PARA ELIMINAR LABORATORIO (Formulario oculto) -->
+    <form id="formEliminarLaboratorio" method="POST" style="display:none;">
+        {% csrf_token %}
+        <input type="hidden" name="accion" value="eliminar_laboratorio">
+        <input type="hidden" name="laboratorio_id" id="delete-laboratorio-id">
+    </form>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL CREAR LABORATORIO -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalCrearLaboratorio" tabindex="-1" aria-labelledby="modalCrearLaboratorioLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalCrearLaboratorioLabel">Crear Nuevo Laboratorio</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form method="POST" id="formCrearLaboratorio">
+                    {% csrf_token %}
+                    <input type="hidden" name="accion" value="crear_laboratorio">
+                    <input type="hidden" name="curso_id" id="create-laboratorio-curso-id">
+                    <input type="hidden" name="horarios_json" id="create-horarios-json">
+
+                    <div class="modal-body">
+                        <!-- Selección de Curso -->
+                        <div class="mb-3">
+                            <label for="create-curso-select" class="form-label">Curso</label>
+                            <select class="form-select" id="create-curso-select" onchange="cargarGruposTeoria()">
+                                <option value="">--- Seleccione Curso ---</option>
+                                <!-- Cursos cargados por JS -->
+                            </select>
+                        </div>
+
+                        <!-- Grupo de Teoría Asociado -->
+                        <div class="mb-3">
+                            <label for="create-grupo-teoria" class="form-label">Grupo de Teoría Asociado</label>
+                            <select class="form-select" id="create-grupo-teoria" name="grupo_teoria_id" required>
+                                <option value="">--- Seleccione Grupo de Teoría ---</option>
+                                <!-- Grupos cargados por JS -->
+                            </select>
+                            <div class="form-text">Debe seleccionar un grupo de teoría existente para crear el laboratorio</div>
+                        </div>
+
+                        <!-- Letra del Laboratorio -->
+                        <div class="mb-3">
+                            <label for="create-laboratorio-letra" class="form-label">Letra del Laboratorio (A, B, C...)</label>
+                            <input type="text" class="form-control" id="create-laboratorio-letra" name="grupo" required maxlength="1">
+                            <div class="form-text">Ejemplo: Para laboratorio A se creará: LID_CURSOLETRA (ej: L1702224A)</div>
+                        </div>
+
+                        <!-- Profesor -->
+                        <div class="mb-3">
+                            <label for="create-profesor-lab" class="form-label">Profesor de Laboratorio</label>
+                            <select class="form-select" id="create-profesor-lab" name="profesor_id">
+                                <option value="">--- Seleccione Profesor ---</option>
+                                {% for p in profesores %}
+                                <option value="{{ p.perfil.id }}">{{ p.perfil.nombre }} ({{ p.perfil.id }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <!-- Capacidad -->
+                        <div class="mb-3">
+                            <label for="create-capacidad-lab" class="form-label">Capacidad de Alumnos</label>
+                            <input type="number" class="form-control" id="create-capacidad-lab" name="capacidad" min="1" required>
+                        </div>
+                        
+                        <!-- Horarios -->
+                        <h6 class="mt-4">Horarios (solo en aulas tipo Laboratorio)</h6>
+                        <div id="horarios-container-crear" class="mb-3 border p-3 rounded">
+                            <!-- Aquí se añaden los bloques de horario -->
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="agregarHorario('crear')">
+                            <i class="bi bi-clock-history"></i> Agregar Bloque Horario
+                        </button>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                        <button type="submit" class="btn btn-primary">Crear Laboratorio</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL GESTIONAR LABORATORIOS -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalGestionarLaboratorios" tabindex="-1" aria-labelledby="modalGestionarLaboratoriosLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalGestionarLaboratoriosLabel">Gestión de Laboratorios</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small">Curso: <strong id="gestion-curso-nombre-lab"></strong></p>
+                    
+                    <div class="mb-4">
+                        <label for="select-laboratorio" class="form-label">Seleccionar Laboratorio a Gestionar:</label>
+                        <select class="form-select" id="select-laboratorio" onchange="cargarDetalleLaboratorio()">
+                            <option value="">--- Seleccione un Laboratorio ---</option>
+                            <!-- Opciones cargadas por JS -->
+                        </select>
+                    </div>
+
+                    <!-- Formulario de Edición de Laboratorio -->
+                    <div id="form_edicion_laboratorio" style="display:none;" class="p-4 border rounded shadow-sm">
+                        <h6 class="border-bottom pb-2">Editar Detalles del Laboratorio Seleccionado</h6>
+                        <form method="POST" id="formEditarLaboratorio">
+                            {% csrf_token %}
+                            <input type="hidden" name="accion" value="editar_laboratorio">
+                            <input type="hidden" name="laboratorio_id" id="edit_laboratorio_id_real">
+                            <input type="hidden" name="horarios_json" id="edit-horarios-json">
+
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="edit_profesor_lab" class="form-label">Profesor</label>
+                                    <select class="form-select" id="edit_profesor_lab" name="profesor_id">
+                                        <option value="">--- Seleccione Profesor (Opcional) ---</option>
+                                        {% for p in profesores %}
+                                        <option value="{{ p.perfil.id }}">{{ p.perfil.nombre }} ({{ p.perfil.id }})</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="edit_capacidad_lab" class="form-label">Capacidad de Alumnos</label>
+                                    <input type="number" class="form-control" id="edit_capacidad_lab" name="capacidad" min="1" required>
+                                </div>
+                            </div>
+
+                            <h6 class="mt-4">Horarios (solo en aulas tipo Laboratorio)</h6>
+                            <div id="horarios-container-editar" class="mb-3 border p-3 rounded">
+                                <!-- Aquí se cargan los bloques de horario existentes por JS -->
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary mb-3" onclick="agregarHorario('editar')">
+                                <i class="bi bi-clock-history"></i> Agregar Bloque Horario
+                            </button>
+                            
+                            <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                                <button type="button" class="btn btn-danger" onclick="eliminarLaboratorioSeleccionado()">
+                                    <i class="bi bi-trash"></i> Eliminar Laboratorio
+                                </button>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-save"></i> Guardar Cambios
+                                </button>
+                            </div>
+                        </form>
+
+                        <!-- Formulario de Eliminación de Laboratorio (Oculto) -->
+                        <form method="POST" id="form_eliminar_laboratorio" style="display:none;">
+                            {% csrf_token %}
+                            <input type="hidden" name="accion" value="eliminar_laboratorio">
+                            <input type="hidden" name="laboratorio_id" id="delete_laboratorio_id">
+                        </form>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- JAVASCRIPT -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <script>
+        // Variables globales para el manejo de horarios
+        let horariosTempCrear = [];
+        let horariosTempEditar = [];
+        const AULAS = [
+            {% for a in aulas %}
+            { id: '{{ a.id }}', nombre: '{{ a.id }}', tipo: '{{ a.tipo }}' },
+            {% endfor %}
+        ];
+        
+        // ======================================================================
+        // LÓGICA DE GESTIÓN DE LABORATORIO
+        // ======================================================================
+
+        // Cargar cursos con grupos de teoría al abrir modal de creación
+        function cargarCursosConTeoria() {
+            fetch(`?accion=obtener_cursos_con_teoria`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                let select = document.getElementById('create-curso-select');
+                select.innerHTML = '<option value="">--- Seleccione Curso ---</option>';
+                resp.cursos.forEach(c => {
+                    select.innerHTML += `<option value="${c.id}">${c.id} - ${c.nombre}</option>`;
+                });
+            })
+            .catch(error => {
+                console.error('Error al cargar cursos:', error);
+                alert('Error al cargar la lista de cursos.');
+            });
+        }
+
+        // Cargar grupos de teoría para el curso seleccionado
+        function cargarGruposTeoria() {
+            const cursoId = document.getElementById('create-curso-select').value;
+            if (!cursoId) return;
+
+            document.getElementById('create-laboratorio-curso-id').value = cursoId;
+            
+            fetch(`?accion=obtener_grupos_teoria_curso&curso_id=${cursoId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                let select = document.getElementById('create-grupo-teoria');
+                select.innerHTML = '<option value="">--- Seleccione Grupo de Teoría ---</option>';
+                resp.grupos_teoria.forEach(g => {
+                    select.innerHTML += `<option value="${g.id}">Grupo ${g.grupo} (ID: ${g.id})</option>`;
+                });
+            })
+            .catch(error => {
+                console.error('Error al cargar grupos de teoría:', error);
+                alert('Error al cargar la lista de grupos de teoría.');
+            });
+        }
+
+        // Cargar laboratorios de un curso en modal de gestión
+        function cargarLaboratoriosCurso(cursoId) {
+            if (!cursoId) return;
+
+            fetch(`?accion=obtener_laboratorios_curso&curso_id=${cursoId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                let select = document.getElementById('select-laboratorio');
+                select.innerHTML = '<option value="">--- Seleccione un Laboratorio ---</option>';
+                resp.laboratorios.forEach(l => {
+                    select.innerHTML += `<option value="${l.id}">Laboratorio ${l.grupo} (ID: ${l.id})</option>`;
+                });
+                document.getElementById('gestion-curso-nombre-lab').textContent = `Curso: ${cursoId}`;
+            })
+            .catch(error => {
+                console.error('Error al cargar laboratorios:', error);
+                alert('Error al cargar la lista de laboratorios.');
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Modal Crear Laboratorio
+            var modalCrearLaboratorio = document.getElementById('modalCrearLaboratorio');
+            modalCrearLaboratorio.addEventListener('show.bs.modal', function (event) {
+                var button = event.relatedTarget;
+                var cursoId = button ? button.getAttribute('data-bs-cursoid') : null;
+                var cursoNombre = button ? button.getAttribute('data-bs-cursonombre') : null;
+                
+                // Si se abre desde botón específico, precargar ese curso
+                if (cursoId) {
+                    cargarCursosConTeoria().then(() => {
+                        document.getElementById('create-curso-select').value = cursoId;
+                        document.getElementById('create-laboratorio-curso-id').value = cursoId;
+                        cargarGruposTeoria();
+                    });
+                } else {
+                    cargarCursosConTeoria();
+                }
+                
+                // Resetear horarios
+                horariosTempCrear = [];
+                renderHorarios('crear');
+                
+                // Limpiar otros campos
+                document.getElementById('create-laboratorio-letra').value = '';
+                document.getElementById('create-profesor-lab').value = '';
+                document.getElementById('create-capacidad-lab').value = '';
+            });
+
+            // Modal Gestionar Laboratorios
+            var modalGestionarLaboratorios = document.getElementById('modalGestionarLaboratorios');
+            modalGestionarLaboratorios.addEventListener('show.bs.modal', function (event) {
+                var button = event.relatedTarget; 
+                var cursoId = button.getAttribute('data-bs-cursoid');
+                
+                document.getElementById('gestion-curso-nombre-lab').textContent = `Cargando laboratorios para ${cursoId}...`;
+                document.getElementById('form_edicion_laboratorio').style.display = 'none';
+                document.getElementById('select-laboratorio').innerHTML = '<option value="">--- Seleccione un Laboratorio ---</option>';
+
+                cargarLaboratoriosCurso(cursoId);
+            });
+        });
+
+        // ======================================================================
+        // FUNCIONES DE HORARIOS (iguales a gestión de cursos)
+        // ======================================================================
+
+        function getHorariosTemp(mode) {
+            return mode === 'crear' ? horariosTempCrear : horariosTempEditar;
+        }
+
+        function setHorariosTemp(mode, value) {
+            if (mode === 'crear') {
+                horariosTempCrear = value;
+            } else {
+                horariosTempEditar = value;
+            }
+        }
+
+        function formatTimeForInput(timeString) {
+            if (!timeString) return '';
+            if (timeString.length === 5) return timeString;
+            if (timeString.length === 8) return timeString.substring(0, 5);
+            return timeString;
+        }
+
+        function normalizeTimeForBackend(timeString) {
+            if (!timeString) return '';
+            if (timeString.length === 8) return timeString;
+            if (timeString.length === 5) return timeString + ':00';
+            return timeString;
+        }
+
+        // Filtrar solo aulas de tipo laboratorio
+        function getAulasLaboratorio() {
+            return AULAS.filter(a => a.tipo === 'LABORATORIO');
+        }
+
+        function generarBloqueHorarioHTML(horario, index, mode) {
+            const horariosTemp = getHorariosTemp(mode);
+            const inicioValue = formatTimeForInput(horario.inicio);
+            const finValue = formatTimeForInput(horario.fin);
+            const aulasLab = getAulasLaboratorio();
+            const aulaOptions = aulasLab.map(a => 
+                `<option value="${a.id}" ${horario.aula_id == a.id ? 'selected' : ''}>${a.nombre}</option>`
+            ).join('');
+
+            return `
+                <div class="row mb-2 border-bottom pb-2" data-index="${index}">
+                    <div class="col-md-3">
+                        <select class="form-select form-select-sm" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'dia', this.value)">
+                            <option value="">Día</option>
+                            <option value="LUNES" ${horario.dia === 'LUNES' ? 'selected' : ''}>Lunes</option>
+                            <option value="MARTES" ${horario.dia === 'MARTES' ? 'selected' : ''}>Martes</option>
+                            <option value="MIERCOLES" ${horario.dia === 'MIERCOLES' ? 'selected' : ''}>Miércoles</option>
+                            <option value="JUEVES" ${horario.dia === 'JUEVES' ? 'selected' : ''}>Jueves</option>
+                            <option value="VIERNES" ${horario.dia === 'VIERNES' ? 'selected' : ''}>Viernes</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <input type="time" class="form-control form-control-sm" value="${inicioValue}" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'inicio', this.value)">
+                    </div>
+                    <div class="col-md-3">
+                        <input type="time" class="form-control form-control-sm" value="${finValue}" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'fin', this.value)">
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'aula_id', this.value)">
+                            <option value="">Laboratorio</option>
+                            ${aulaOptions}
+                        </select>
+                    </div>
+                    <div class="col-md-1 text-end">
+                        <button type="button" class="btn btn-danger btn-sm" onclick="eliminarHorario(${index}, '${mode}')">✕</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function renderHorarios(mode) {
+            const container = document.getElementById(`horarios-container-${mode}`);
+            const horariosTemp = getHorariosTemp(mode);
+            const jsonField = document.getElementById(`${mode}-horarios-json`);
+            
+            container.innerHTML = '';
+            
+            if (horariosTemp.length === 0) {
+                container.innerHTML = '<div class="text-muted text-center py-3">No hay horarios agregados. Agregue al menos un bloque.</div>';
+            } else {
+                horariosTemp.forEach((horario, index) => {
+                    container.innerHTML += generarBloqueHorarioHTML(horario, index, mode);
+                });
+            }
+
+            if (jsonField) {
+                const horariosParaEnviar = horariosTemp.map(h => ({
+                    ...h,
+                    inicio: normalizeTimeForBackend(h.inicio),
+                    fin: normalizeTimeForBackend(h.fin)
+                }));
+                jsonField.value = JSON.stringify(horariosParaEnviar);
+                console.log(`Horarios (${mode}) enviados:`, jsonField.value);
+            }
+        }
+        
+        function agregarHorario(mode) {
+            const horariosTemp = getHorariosTemp(mode);
+            horariosTemp.push({ dia: '', inicio: '', fin: '', aula_id: '' });
+            setHorariosTemp(mode, horariosTemp);
+            renderHorarios(mode);
+        }
+
+        function actualizarHorarioTemp(mode, index, key, value) {
+            const horariosTemp = getHorariosTemp(mode);
+            
+            if (index >= 0 && index < horariosTemp.length) {
+                if (key === 'inicio' || key === 'fin') {
+                    horariosTemp[index][key] = normalizeTimeForBackend(value);
+                } else {
+                    horariosTemp[index][key] = value;
+                }
+            }
+            
+            setHorariosTemp(mode, horariosTemp);
+            const jsonField = document.getElementById(`${mode}-horarios-json`);
+            if (jsonField) {
+                const horariosParaEnviar = horariosTemp.map(h => ({
+                    ...h,
+                    inicio: normalizeTimeForBackend(h.inicio),
+                    fin: normalizeTimeForBackend(h.fin)
+                }));
+                jsonField.value = JSON.stringify(horariosParaEnviar);
+            }
+        }
+
+        function eliminarHorario(index, mode) {
+            if (confirm("¿Seguro que desea eliminar este bloque de horario?")) {
+                const horariosTemp = getHorariosTemp(mode);
+                horariosTemp.splice(index, 1);
+                setHorariosTemp(mode, horariosTemp);
+                renderHorarios(mode);
+            }
+        }
+
+        // Cargar detalle de un laboratorio específico
+        function cargarDetalleLaboratorio() {
+            const laboratorioId = document.getElementById('select-laboratorio').value;
+
+            if(!laboratorioId) {
+                document.getElementById('form_edicion_laboratorio').style.display = 'none';
+                return;
+            }
+
+            fetch(`?accion=obtener_detalle_laboratorio&laboratorio_id=${laboratorioId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                if(resp.ok) {
+                    let d = resp.data;
+                    document.getElementById('edit_laboratorio_id_real').value = d.id;
+                    document.getElementById('delete_laboratorio_id').value = d.id;
+                    document.getElementById('edit_profesor_lab').value = d.profesor_id;
+                    document.getElementById('edit_capacidad_lab').value = d.capacidad;
+                    
+                    if (d.horarios && Array.isArray(d.horarios)) {
+                        d.horarios = d.horarios.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                    }
+                    
+                    horariosTempEditar = d.horarios || []; 
+                    renderHorarios('editar');
+
+                    document.getElementById('form_edicion_laboratorio').style.display = 'block';
+                } else {
+                    alert(resp.msg);
+                }
+            })
+            .catch(error => {
+                console.error('Error al cargar detalle del laboratorio:', error);
+                alert('Error al cargar el detalle del laboratorio.');
+            });
+        }
+
+        function eliminarLaboratorioSeleccionado() {
+            if(confirm("¿Seguro que desea eliminar este laboratorio y todos sus horarios asociados? Esta acción no se puede deshacer.")) {
+                document.getElementById('form_eliminar_laboratorio').submit();
+            }
+        }
+
+        // Validaciones de formularios
+        document.addEventListener('DOMContentLoaded', function() {
+            const formCrearLab = document.getElementById('formCrearLaboratorio');
+            const formEditarLab = document.getElementById('formEditarLaboratorio');
+            
+            if (formCrearLab) {
+                formCrearLab.addEventListener('submit', function(e) {
+                    // Validar letra del laboratorio
+                    const letraLab = document.getElementById('create-laboratorio-letra').value;
+                    if (!letraLab || letraLab.length !== 1 || !/^[A-Z]$/.test(letraLab)) {
+                        e.preventDefault();
+                        alert('La letra del laboratorio debe ser una sola letra mayúscula (A-Z)');
+                        return;
+                    }
+                    
+                    // Validar grupo de teoría seleccionado
+                    const grupoTeoria = document.getElementById('create-grupo-teoria').value;
+                    if (!grupoTeoria) {
+                        e.preventDefault();
+                        alert('Debe seleccionar un grupo de teoría asociado');
+                        return;
+                    }
+                    
+                    // Verificar que haya horarios
+                    if (horariosTempCrear.length === 0) {
+                        e.preventDefault();
+                        alert('Debe agregar al menos un bloque de horario');
+                        return;
+                    }
+                    
+                    // Verificar que todos los horarios estén completos y en aulas laboratorio
+                    for (let i = 0; i < horariosTempCrear.length; i++) {
+                        const horario = horariosTempCrear[i];
+                        if (!horario.dia || !horario.inicio || !horario.fin || !horario.aula_id) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} está incompleto. Por favor complete todos los campos.`);
+                            return;
+                        }
+                        
+                        // Validar formato de hora
+                        if (!/^\d{2}:\d{2}:\d{2}$/.test(horario.inicio) || !/^\d{2}:\d{2}:\d{2}$/.test(horario.fin)) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} tiene formato de hora inválido. Debe ser HH:MM:SS`);
+                            return;
+                        }
+                        
+                        // Verificar que el aula sea de tipo laboratorio
+                        const aula = AULAS.find(a => a.id === horario.aula_id);
+                        if (!aula || aula.tipo !== 'LABORATORIO') {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} debe estar en un aula tipo LABORATORIO`);
+                            return;
+                        }
+                    }
+                    
+                    // Forzar actualización del campo JSON
+                    const jsonField = document.getElementById('create-horarios-json');
+                    if (jsonField) {
+                        const horariosParaEnviar = horariosTempCrear.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                        jsonField.value = JSON.stringify(horariosParaEnviar);
+                        console.log('JSON enviado (crear lab):', jsonField.value);
+                    }
+                });
+            }
+            
+            if (formEditarLab) {
+                formEditarLab.addEventListener('submit', function(e) {
+                    // Verificar que haya horarios
+                    if (horariosTempEditar.length === 0) {
+                        e.preventDefault();
+                        alert('Debe haber al menos un bloque de horario');
+                        return;
+                    }
+                    
+                    // Verificar que todos los horarios estén completos y en aulas laboratorio
+                    for (let i = 0; i < horariosTempEditar.length; i++) {
+                        const horario = horariosTempEditar[i];
+                        if (!horario.dia || !horario.inicio || !horario.fin || !horario.aula_id) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} está incompleto. Por favor complete todos los campos.`);
+                            return;
+                        }
+                        
+                        // Validar formato de hora
+                        if (!/^\d{2}:\d{2}:\d{2}$/.test(horario.inicio) || !/^\d{2}:\d{2}:\d{2}$/.test(horario.fin)) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} tiene formato de hora inválido. Debe ser HH:MM:SS`);
+                            return;
+                        }
+                        
+                        // Verificar que el aula sea de tipo laboratorio
+                        const aula = AULAS.find(a => a.id === horario.aula_id);
+                        if (!aula || aula.tipo !== 'LABORATORIO') {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} debe estar en un aula tipo LABORATORIO`);
+                            return;
+                        }
+                    }
+                    
+                    // Forzar actualización del campo JSON
+                    const jsonField = document.getElementById('edit-horarios-json');
+                    if (jsonField) {
+                        const horariosParaEnviar = horariosTempEditar.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                        jsonField.value = JSON.stringify(horariosParaEnviar);
+                        console.log('JSON enviado (editar lab):', jsonField.value);
+                    }
+                });
+            }
+        });
+
+    </script>
+
+{% endblock content %}

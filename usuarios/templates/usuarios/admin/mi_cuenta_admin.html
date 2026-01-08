@@ -1,0 +1,44 @@
+{% extends "usuarios/admin/base_admin.html" %}
+
+{% block content %}
+    <h4 class="mb-4">Configuración de la Cuenta de Administrador</h4>
+    
+    <div class="row">
+        <div class="col-md-6">
+            <h5>Datos del Perfil</h5>
+            <ul class="list-unstyled">
+                <li><strong>Nombre Completo:</strong> {{ perfil.nombre }}</li>
+                <li><strong>Código de Usuario:</strong> {{ perfil.id }}</li>
+                <li><strong>Correo:</strong> {{ perfil.email }}</li>
+                <li><strong>Rol:</strong> {{ perfil.rol }}</li>
+            </ul>
+        </div>
+        
+        <div class="col-md-6">
+            <h5>Seguridad: Cambio de Contraseña</h5>
+            
+            <form method="POST" action="#">
+                {% csrf_token %}
+                
+                <div class="mb-3">
+                    <label for="old_password" class="form-label">Contraseña Actual</label>
+                    <input type="password" class="form-control" id="old_password" name="old_password" required>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="new_password1" class="form-label">Nueva Contraseña</label>
+                    <input type="password" class="form-control" id="new_password1" name="new_password1" required>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="new_password2" class="form-label">Confirmar Nueva Contraseña</label>
+                    <input type="password" class="form-control" id="new_password2" name="new_password2" required>
+                </div>
+                
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary">Guardar Nueva Contraseña</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{% endblock content %}

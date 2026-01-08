@@ -1,0 +1,265 @@
+{% extends "usuarios/admin/base_admin.html" %}
+{% load humanize custom_filters %}
+
+{% block content %}
+<div class="card shadow rounded-4 border-0">
+  <div class="card-body p-4">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h3 class="fw-bold mb-1 text-primary">{{ perfil_estudiante.nombre }}</h3>
+        <div class="text-muted small">CUI: <strong>{{ perfil_estudiante.id }}</strong> — Email: {{ perfil_estudiante.email|default:"-" }}</div>
+        <span class="badge mt-2 px-3 py-2 {% if perfil_estudiante.estadoCuenta %}bg-success{% else %}bg-danger{% endif %}">
+            {% if perfil_estudiante.estadoCuenta %}Activo{% else %}Inactivo{% endif %}
+        </span>
+      </div>
+      <div class="text-end">
+        <a class="btn btn-outline-primary" href="{% url 'usuarios:registro_estudiantes_admin' %}">
+          <i class="bi bi-arrow-left"></i> Volver
+        </a>
+      </div>
+    </div>
+
+    <hr>
+
+    <!-- Información Básica -->
+    <h6 class="text-uppercase small text-secondary fw-bold">Información básica</h6>
+    <div class="row g-4 mb-3">
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>Nombre</strong>
+          <div class="text-muted">{{ perfil_estudiante.nombre }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>CUI</strong>
+          <div class="text-muted">{{ perfil_estudiante.id }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="bg-light p-3 rounded-3 border small">
+          <strong>Email</strong>
+          <div class="text-muted">{{ perfil_estudiante.email|default:"-" }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MATRÍCULAS Y CURSOS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Matrículas y Cursos</h6>
+
+    {% if matriculas %}
+      <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-hover align-middle small">
+            <thead class="table-primary text-dark">
+            <tr>
+                <th>Grupo</th>
+                <th>Curso</th>
+                <th>Docente</th>
+                <th>Estado</th>
+                <th>Horarios</th>
+                <th>Notas</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for mat in matriculas %}
+            <tr>
+
+                <!-- GRUPO -->
+                <td><strong>{{ mat.grupo.id }}</strong> ({{ mat.grupo.grupo }})</td>
+
+                <!-- CURSO -->
+                <td>{{ mat.grupo.curso.id }} - {{ mat.grupo.curso.nombre }}</td>
+
+                <!-- DOCENTE -->
+                <td>
+                {% if mat.grupo.profesor %}
+                    {{ mat.grupo.profesor.perfil.nombre }}
+                {% else %}-{% endif %}
+                </td>
+
+                <!-- ESTADO -->
+                <td>
+                {% if mat.estado %}
+                    <span class="badge bg-success">Activa</span>
+                {% else %}
+                    <span class="badge bg-secondary">Inactiva</span>
+                {% endif %}
+                </td>
+
+                <!-- BOTÓN HORARIOS -->
+                <td>
+                <button class="btn btn-outline-info btn-sm"
+                        data-bs-toggle="modal"
+                        data-bs-target="#horariosModal{{ mat.grupo.id }}">
+                    Ver horarios
+                </button>
+
+                <!-- MODAL HORARIOS -->
+                <div class="modal fade" id="horariosModal{{ mat.grupo.id }}" tabindex="-1">
+                    <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content rounded-4 shadow">
+
+                        <div class="modal-header bg-info text-white rounded-top-4">
+                        <h5 class="modal-title">Horarios — Grupo {{ mat.grupo.id }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+
+                        <div class="modal-body">
+                        {% if horarios_by_group.mat_map|get_item:mat.grupo.id %}
+                            {% for h in horarios_by_group.mat_map|get_item:mat.grupo.id %}
+                            <div class="p-2 mb-2 border rounded-3">
+                                <strong>{{ h.dia }}</strong><br>
+                                {{ h.horaInicio }} — {{ h.horaFin }}<br>
+                                Aula: {{ h.aula }}
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-muted">Sin horarios registrados.</p>
+                        {% endif %}
+                        </div>
+
+                    </div>
+                    </div>
+                </div>
+                </td>
+
+                <!-- BOTÓN NOTAS -->
+                <td>
+                <button class="btn btn-outline-primary btn-sm"
+                        data-bs-toggle="modal"
+                        data-bs-target="#notasModal{{ mat.grupo.id }}">
+                    Ver notas
+                </button>
+
+                <!-- MODAL NOTAS -->
+                <div class="modal fade" id="notasModal{{ mat.grupo.id }}" tabindex="-1">
+                    <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content rounded-4 shadow">
+
+                        <div class="modal-header bg-primary text-white rounded-top-4">
+                        <h5 class="modal-title">Notas — {{ mat.grupo.curso.nombre }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+
+                        <div class="modal-body">
+                        {% with notas=notas_por_curso|get_item:mat.grupo.id %}
+                            {% if notas %}
+                            <div class="row g-2">
+                                <div class="col-6"><strong>EC1:</strong> {{ notas.EC1|default:"-" }}</div>
+                                <div class="col-6"><strong>EP1:</strong> {{ notas.EP1|default:"-" }}</div>
+                                <div class="col-6"><strong>EC2:</strong> {{ notas.EC2|default:"-" }}</div>
+                                <div class="col-6"><strong>EP2:</strong> {{ notas.EP2|default:"-" }}</div>
+                                <div class="col-6"><strong>EC3:</strong> {{ notas.EC3|default:"-" }}</div>
+                                <div class="col-6"><strong>EP3:</strong> {{ notas.EP3|default:"-" }}</div>
+                            </div>
+                            {% else %}
+                            <p class="text-muted">Sin notas registradas.</p>
+                            {% endif %}
+                        {% endwith %}
+                        </div>
+
+                    </div>
+                    </div>
+                </div>
+                </td>
+
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-warning small mt-2">No tiene matrículas registradas.</div>
+    {% endif %}
+
+    <!-- LABORATORIOS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Laboratorios inscritos</h6>
+
+    {% if laboratorios %}
+        <div class="table-responsive shadow-sm rounded-3">
+            <table class="table table-sm table-hover align-middle small">
+            <thead class="table-info">
+                <tr>
+                <th>ID Lab</th>
+                <th>Curso</th>
+                <th class="text-center">Grupo</th>
+                <th>Docente</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for lab in laboratorios %}
+                <tr>
+                <td>{{ lab.id }}</td>
+                <td>{{ lab.curso }}</td>
+                <td class="text-center">{{ lab.grupo }}</td>
+                <td>{{ lab.profesor }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            </table>
+        </div>
+    {% else %}
+      <div class="alert alert-secondary small">No está matriculado en laboratorios.</div>
+    {% endif %}
+
+    <!-- ASISTENCIAS -->
+    <h6 class="text-uppercase small text-secondary fw-bold mt-4">Historial de Asistencia</h6>
+
+    {% if asistencias %}
+      <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-sm align-middle small">
+          <thead class="table-light">
+            <tr>
+              <th>Fecha</th>
+              <th>Grupo</th>
+              <th>Curso</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in asistencias %}
+            <tr>
+              <td>{{ a.fecha }}</td>
+              <td>{{ a.grupo_id }}</td>
+              <td>{{ a.curso_nombre }}</td>
+              <td>
+                {% if a.estado == 'PRESENTE' %}
+                  <span class="badge bg-success">Presente</span>
+                {% else %}
+                  <span class="badge bg-danger">Falta</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-secondary small">No hay registros de asistencia.</div>
+    {% endif %}
+
+    <!-- RESUMEN -->
+    <div class="row mt-4 g-3">
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Total Matrículas</h6>
+          <div class="fs-2 fw-bold text-primary">{{ resumen.total_matriculas }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Asistencias (P)</h6>
+          <div class="fs-2 fw-bold text-success">{{ resumen.total_presentes }}</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3 shadow-sm text-center rounded-3">
+          <h6 class="small text-muted">Faltas (F)</h6>
+          <div class="fs-2 fw-bold text-danger">{{ resumen.total_faltas }}</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock content %}

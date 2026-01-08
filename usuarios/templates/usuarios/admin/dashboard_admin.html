@@ -1,4 +1,4 @@
-{% extends "usuarios/secretaria/base_secretaria.html" %}
+{% extends "usuarios/admin/base_admin.html" %}
 
 {% block content %}
   <h4 class="mb-4">Panel de Control | Bienvenido(a), <strong>{{ perfil.nombre }}</strong></h4>
@@ -16,7 +16,7 @@
                 <i class="bi bi-person-badge fs-2"></i>
             </div>
             <div class="card-footer bg-success border-0 py-2">
-                <a href="{% url 'usuarios:registro_profesores' %}" class="text-white small d-flex align-items-center">
+                <a href="{% url 'usuarios:registro_profesores_admin' %}" class="text-white small d-flex align-items-center">
                     <i class="bi bi-arrow-right-circle me-1"></i> Ver profesores
                 </a>
             </div>
@@ -34,7 +34,7 @@
                 <i class="bi bi-people fs-2"></i>
             </div>
             <div class="card-footer bg-info border-0 py-2">
-                <a href="{% url 'usuarios:registro_estudiantes' %}" class="text-white small d-flex align-items-center">
+                <a href="{% url 'usuarios:registro_estudiantes_admin' %}" class="text-white small d-flex align-items-center">
                     <i class="bi bi-arrow-right-circle me-1"></i> Gestionar estudiantes
                 </a>
             </div>
@@ -52,7 +52,7 @@
                 <i class="bi bi-journal-text fs-2"></i>
             </div>
             <div class="card-footer bg-warning border-0 py-2">
-                <a href="{% url 'usuarios:gestion_cursos' %}" class="text-white small d-flex align-items-center">
+                <a href="{% url 'usuarios:gestion_cursos_admin' %}" class="text-white small d-flex align-items-center">
                     <i class="bi bi-arrow-right-circle me-1"></i> Gestionar cursos
                 </a>
             </div>
@@ -70,7 +70,7 @@
                 <i class="bi bi-building fs-2"></i>
             </div>
             <div class="card-footer bg-primary border-0 py-2">
-                <a href="{% url 'usuarios:ver_horarios_clases' %}" class="text-white small d-flex align-items-center">
+                <a href="{% url 'usuarios:ver_horarios_clases_admin' %}" class="text-white small d-flex align-items-center">
                     <i class="bi bi-arrow-right-circle me-1"></i> Ver horarios
                 </a>
             </div>
@@ -259,7 +259,6 @@
             <div class="card-header bg-light">
                 <h6 class="mb-0 fw-bold">
                     <i class="bi bi-person-check me-2"></i> Profesores con más grupos (top mas explotados)
-                </h6>
             </div>
             <div class="card-body p-0">
                 {% if profesores_activos %}

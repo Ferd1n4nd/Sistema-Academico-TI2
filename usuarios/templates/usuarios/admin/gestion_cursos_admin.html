@@ -1,0 +1,997 @@
+{% extends "usuarios/admin/base_admin.html" %}
+
+{% block content %}
+
+    <h4 class="mb-4">Gestión de Cursos Académicos</h4>
+    
+    <style>
+        .col-acciones {
+            width: 268px !important;
+        }
+        /* Estilos para formularios burbuja (Modales) */
+        .modal-header { background-color: #6b1616; color: white; }
+        .btn-close { filter: invert(1); }
+        .bg-light-subtle { background-color: #f8f9fa; }
+        .file-upload-container { 
+            min-height: 38px; /* Para que el layout no salte cuando no hay archivos cargados */
+            display: flex;
+            align-items: center;
+        }
+        .file-link-section {
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+    </style>
+
+    <!-- BOTON CREAR CURSO (Arriba) -->
+    <div class="row mb-3">
+        <div class="col-md-12 text-end">
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalCrearCurso">
+                <i class="bi bi-plus-circle"></i> Crear Nuevo Curso
+            </button>
+        </div>
+    </div>
+
+    <!-- TABLA LISTA DE CURSOS -->
+    <div class="table-responsive card shadow-sm">
+        <table class="table table-bordered table-striped table-hover mb-0" id="cursos-table">
+            <thead class="table-dark">
+                <tr>
+                    <th>Código (ID)</th>
+                    <th>Nombre</th>
+                    <th>Créditos</th>
+                    <th class="text-center">Grupos Teoría</th>
+                    <th class="text-center">Matriculados</th>
+                    <th class="text-center col-acciones">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in cursos %}
+                <tr>
+                    <td>{{ c.id }}</td>
+                    <td>{{ c.nombre }}</td>
+                    <td class="text-center">{{ c.creditos }}</td>
+                    <td class="text-center">{{ c.num_grupos_teoria }}</td>
+                    <td class="text-center">{{ c.num_matriculados }}</td>
+                    <td class="col-acciones text-center">
+                        <!-- EDITAR CURSO -->
+                        <button type="button" class="btn btn-warning btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#modalEditarCurso"
+                            data-bs-id="{{ c.id }}"
+                            data-bs-nombre="{{ c.nombre }}"
+                            data-bs-creditos="{{ c.creditos }}"
+                            data-bs-ec1="{{ c.porcentajeEC1 }}"
+                            data-bs-ep1="{{ c.porcentajeEP1 }}"
+                            data-bs-ec2="{{ c.porcentajeEC2 }}"
+                            data-bs-ep2="{{ c.porcentajeEP2 }}"
+                            data-bs-ec3="{{ c.porcentajeEC3 }}"
+                            data-bs-ep3="{{ c.porcentajeEP3 }}"
+                            data-bs-silabo="{{ c.silabo_url|default:'None' }}"
+                            data-bs-f1a="{{ c.Fase1notaAlta_url|default:'None' }}"
+                            data-bs-f1m="{{ c.Fase1notaMedia_url|default:'None' }}"
+                            data-bs-f1b="{{ c.Fase1notaBaja_url|default:'None' }}"
+                            data-bs-f2a="{{ c.Fase2notaAlta_url|default:'None' }}"
+                            data-bs-f2m="{{ c.Fase2notaMedia_url|default:'None' }}"
+                            data-bs-f2b="{{ c.Fase2notaBaja_url|default:'None' }}"
+                            data-bs-f3a="{{ c.Fase3notaAlta_url|default:'None' }}"
+                            data-bs-f3m="{{ c.Fase3notaMedia_url|default:'None' }}"
+                            data-bs-f3b="{{ c.Fase3notaBaja_url|default:'None' }}"
+                        >
+                            <i class="bi bi-pencil-square"></i>
+                        </button>
+                        
+                        <!-- ELIMINAR CURSO -->
+                        <button type="button" class="btn btn-danger btn-sm" onclick="confirmarEliminarCurso('{{ c.id }}')">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        
+                        <!-- CREAR GRUPO -->
+                        <button type="button" class="btn btn-info btn-sm text-white"
+                            data-bs-toggle="modal"
+                            data-bs-target="#modalCrearGrupoTeoria"
+                            data-bs-cursoid="{{ c.id }}"
+                            data-bs-cursonombre="{{ c.nombre }}"
+                        >
+                            <i class="bi bi-person-badge"></i> Grupo
+                        </button>
+                        
+                        <!-- GESTIONAR GRUPOS -->
+                        {% if c.num_grupos_teoria > 0 %}
+                            <button type="button" class="btn btn-success btn-sm"
+                                data-bs-toggle="modal"
+                                data-bs-target="#modalGestionarGrupos"
+                                data-bs-cursoid="{{ c.id }}"
+                            >
+                                <i class="bi bi-gear"></i> Grupos ({{ c.num_grupos_teoria }})
+                            </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted">No hay cursos registrados.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- MODAL PARA ELIMINAR CURSO (Formulario oculto) -->
+    <form id="formEliminarCurso" method="POST" style="display:none;">
+        {% csrf_token %}
+        <input type="hidden" name="accion" value="eliminar_curso">
+        <input type="hidden" name="curso_id" id="delete-curso-id">
+    </form>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL CREAR CURSO -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalCrearCurso" tabindex="-1" aria-labelledby="modalCrearCursoLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalCrearCursoLabel">Crear Nuevo Curso</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form method="POST">
+                    {% csrf_token %}
+                    <input type="hidden" name="accion" value="crear_curso">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="create-id" class="form-label">Código del Curso (ID)</label>
+                            <input type="text" class="form-control" id="create-id" name="id" required maxlength="50">
+                        </div>
+                        <div class="mb-3">
+                            <label for="create-nombre" class="form-label">Nombre del Curso</label>
+                            <input type="text" class="form-control" id="create-nombre" name="nombre" required maxlength="255">
+                        </div>
+                        <div class="mb-3">
+                            <label for="create-creditos" class="form-label">Créditos</label>
+                            <input type="number" class="form-control" id="create-creditos" name="creditos" min="1" required>
+                        </div>
+                        <h6 class="mt-4">Porcentajes de Evaluación</h6>
+                        <p class="text-muted small">Valores por defecto son 0.</p>
+                        <div class="row">
+                            <div class="col-4 mb-3"><label for="create-ec1" class="form-label small">EC1 (%)</label><input type="number" class="form-control form-control-sm" id="create-ec1" name="porcentajeEC1" min="0" max="100" value="0"></div>
+                            <div class="col-4 mb-3"><label for="create-ep1" class="form-label small">EP1 (%)</label><input type="number" class="form-control form-control-sm" id="create-ep1" name="porcentajeEP1" min="0" max="100" value="0"></div>
+                            <div class="col-4 mb-3"><label for="create-ec2" class="form-label small">EC2 (%)</label><input type="number" class="form-control form-control-sm" id="create-ec2" name="porcentajeEC2" min="0" max="100" value="0"></div>
+                            <div class="col-4 mb-3"><label for="create-ep2" class="form-label small">EP2 (%)</label><input type="number" class="form-control form-control-sm" id="create-ep2" name="porcentajeEP2" min="0" max="100" value="0"></div>
+                            <div class="col-4 mb-3"><label for="create-ec3" class="form-label small">EC3 (%)</label><input type="number" class="form-control form-control-sm" id="create-ec3" name="porcentajeEC3" min="0" max="100" value="0"></div>
+                            <div class="col-4 mb-3"><label for="create-ep3" class="form-label small">EP3 (%)</label><input type="number" class="form-control form-control-sm" id="create-ep3" name="porcentajeEP3" min="0" max="100" value="0"></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                        <button type="submit" class="btn btn-primary">Crear Curso</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL EDITAR CURSO (ACTUALIZADO) -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalEditarCurso" tabindex="-1" aria-labelledby="modalEditarCursoLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalEditarCursoLabel">Editar Información del Curso</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form method="POST" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <input type="hidden" name="accion" value="editar_curso">
+                    <input type="hidden" name="id" id="edit-id">
+
+                    <div class="modal-body">
+                        <p class="text-muted small">Editando curso con ID: <strong id="edit-curso-id-display"></strong></p>
+                        
+                        <!-- Campos de Edición Básica -->
+                        <div class="row">
+                            <div class="col-md-8 mb-3">
+                                <label for="edit-nombre" class="form-label">Nombre del Curso</label>
+                                <input type="text" class="form-control" id="edit-nombre" name="nombre" required maxlength="255">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="edit-creditos" class="form-label">Créditos</label>
+                                <input type="number" class="form-control" id="edit-creditos" name="creditos" min="1" required>
+                            </div>
+                        </div>
+
+                        <!-- Porcentajes de Evaluación -->
+                        <h6 class="mt-2 border-top pt-3">Porcentajes de Evaluación</h6>
+                        <div class="row">
+                            <div class="col-4 mb-3"><label for="edit-ec1" class="form-label small">EC1 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ec1" name="porcentajeEC1" min="0" max="100"></div>
+                            <div class="col-4 mb-3"><label for="edit-ep1" class="form-label small">EP1 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ep1" name="porcentajeEP1" min="0" max="100"></div>
+                            <div class="col-4 mb-3"><label for="edit-ec2" class="form-label small">EC2 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ec2" name="porcentajeEC2" min="0" max="100"></div>
+                            <div class="col-4 mb-3"><label for="edit-ep2" class="form-label small">EP2 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ep2" name="porcentajeEP2" min="0" max="100"></div>
+                            <div class="col-4 mb-3"><label for="edit-ec3" class="form-label small">EC3 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ec3" name="porcentajeEC3" min="0" max="100"></div>
+                            <div class="col-4 mb-3"><label for="edit-ep3" class="form-label small">EP3 (%)</label><input type="number" class="form-control form-control-sm" id="edit-ep3" name="porcentajeEP3" min="0" max="100"></div>
+                        </div>
+
+                        <!-- GESTIÓN DE ARCHIVOS (Sílabo y Notas) -->
+                        <h6 class="mt-2 border-top pt-3">Gestión de Archivos</h6>
+                        
+                        <!-- Sílabo (mantiene la funcionalidad original) -->
+                        <div class="mb-3">
+                            <label class="form-label">Sílabo</label>
+                            <div id="file-container-silabo" class="file-upload-container">
+                                <!-- Contenido dinámico cargado por JS -->
+                            </div>
+                        </div>
+
+                        <!-- ARCHIVOS DE NOTAS DE FASE (NUEVA VERSIÓN - Solo estado y eliminar) -->
+                        <h6 class="mt-4 border-top pt-3">Archivos de Notas de Fase</h6>
+                        <p class="text-muted small mb-3">Solo puede ver y eliminar archivos existentes. La carga de nuevos archivos se realiza en otra sección del sistema.</p>
+
+                        <div class="accordion" id="accordionArchivosNotas">
+                            <!-- FASE 1 -->
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingOne">
+                                    <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFase1" aria-expanded="true" aria-controls="collapseFase1">
+                                        Fase 1 (Archivos de Notas)
+                                    </button>
+                                </h2>
+                                <div id="collapseFase1" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#accordionArchivosNotas">
+                                    <div class="accordion-body">
+                                        <!-- Campos ocultos para marcar eliminación -->
+                                        <input type="hidden" name="eliminar_fase1alta" value="0" id="check_eliminar_fase1alta">
+                                        <input type="hidden" name="eliminar_fase1media" value="0" id="check_eliminar_fase1media">
+                                        <input type="hidden" name="eliminar_fase1baja" value="0" id="check_eliminar_fase1baja">
+                                        
+                                        <div class="row">
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Alta</label>
+                                                <div id="file-container-fase1alta" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Media</label>
+                                                <div id="file-container-fase1media" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Baja</label>
+                                                <div id="file-container-fase1baja" class="file-upload-container"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- FASE 2 -->
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingTwo">
+                                    <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFase2" aria-expanded="false" aria-controls="collapseFase2">
+                                        Fase 2 (Archivos de Notas)
+                                    </button>
+                                </h2>
+                                <div id="collapseFase2" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#accordionArchivosNotas">
+                                    <div class="accordion-body">
+                                        <!-- Campos ocultos para marcar eliminación -->
+                                        <input type="hidden" name="eliminar_fase2alta" value="0" id="check_eliminar_fase2alta">
+                                        <input type="hidden" name="eliminar_fase2media" value="0" id="check_eliminar_fase2media">
+                                        <input type="hidden" name="eliminar_fase2baja" value="0" id="check_eliminar_fase2baja">
+                                        
+                                        <div class="row">
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Alta</label>
+                                                <div id="file-container-fase2alta" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Media</label>
+                                                <div id="file-container-fase2media" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Baja</label>
+                                                <div id="file-container-fase2baja" class="file-upload-container"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- FASE 3 -->
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingThree">
+                                    <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFase3" aria-expanded="false" aria-controls="collapseFase3">
+                                        Fase 3 (Archivos de Notas)
+                                    </button>
+                                </h2>
+                                <div id="collapseFase3" class="accordion-collapse collapse" aria-labelledby="headingThree" data-bs-parent="#accordionArchivosNotas">
+                                    <div class="accordion-body">
+                                        <!-- Campos ocultos para marcar eliminación -->
+                                        <input type="hidden" name="eliminar_fase3alta" value="0" id="check_eliminar_fase3alta">
+                                        <input type="hidden" name="eliminar_fase3media" value="0" id="check_eliminar_fase3media">
+                                        <input type="hidden" name="eliminar_fase3baja" value="0" id="check_eliminar_fase3baja">
+                                        
+                                        <div class="row">
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Alta</label>
+                                                <div id="file-container-fase3alta" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Media</label>
+                                                <div id="file-container-fase3media" class="file-upload-container"></div>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label small">Nota Baja</label>
+                                                <div id="file-container-fase3baja" class="file-upload-container"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                        <button type="submit" class="btn btn-primary">Guardar Cambios</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL CREAR GRUPO TEORIA (Simplificado, necesita más contexto si fuera el principal foco) -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalCrearGrupoTeoria" tabindex="-1" aria-labelledby="modalCrearGrupoTeoriaLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalCrearGrupoTeoriaLabel">Crear Grupo de Teoría</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form method="POST" id="formCrearGrupoTeoria">
+                    {% csrf_token %}
+                    <input type="hidden" name="accion" value="crear_grupo_teoria">
+                    <input type="hidden" name="curso_id" id="create-grupo-curso-id">
+                    <input type="hidden" name="horarios_json" id="create-horarios-json">
+
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">Creando grupo para: <strong id="create-grupo-curso-nombre-display"></strong></p>
+
+                        <div class="mb-3">
+                            <label for="create-grupo-letra" class="form-label">Letra del Grupo (A, B, C...)</label>
+                            <input type="text" class="form-control" id="create-grupo-letra" name="grupo" required maxlength="1">
+                        </div>
+                        <div class="mb-3">
+                            <label for="create-profesor" class="form-label">Profesor</label>
+                            <select class="form-select" id="create-profesor" name="profesor_id">
+                                <option value="">--- Seleccione Profesor ---</option>
+                                {% for p in profesores %}
+                                <option value="{{ p.perfil.id }}">{{ p.perfil.nombre }} ({{ p.perfil.id }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="create-capacidad" class="form-label">Capacidad de Alumnos</label>
+                            <input type="number" class="form-control" id="create-capacidad" name="capacidad" min="1" required>
+                        </div>
+                        
+                        <h6 class="mt-4">Horarios</h6>
+                        <div id="horarios-container-crear" class="mb-3 border p-3 rounded">
+                            <!-- Aquí se añaden los bloques de horario -->
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="agregarHorario('crear')">
+                            <i class="bi bi-clock-history"></i> Agregar Bloque Horario
+                        </button>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                        <button type="submit" class="btn btn-primary">Crear Grupo</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- MODAL GESTIONAR GRUPOS (Incluye la edición) -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <div class="modal fade" id="modalGestionarGrupos" tabindex="-1" aria-labelledby="modalGestionarGruposLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalGestionarGruposLabel">Gestión de Grupos de Teoría</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small">Curso: <strong id="gestion-curso-nombre"></strong></p>
+                    
+                    <div class="mb-4">
+                        <label for="select-grupo" class="form-label">Seleccionar Grupo a Gestionar:</label>
+                        <select class="form-select" id="select-grupo" onchange="cargarDetalleGrupo()">
+                            <option value="">--- Seleccione un Grupo ---</option>
+                            <!-- Opciones cargadas por JS (accion=obtener_grupos_curso) -->
+                        </select>
+                    </div>
+
+                    <!-- Formulario de Edición de Grupo (Se muestra al seleccionar) -->
+                    <div id="form_edicion_grupo" style="display:none;" class="p-4 border rounded shadow-sm">
+                        <h6 class="border-bottom pb-2">Editar Detalles del Grupo Seleccionado</h6>
+                        <form method="POST" id="formEditarGrupoTeoria">
+                            {% csrf_token %}
+                            <input type="hidden" name="accion" value="editar_grupo_teoria">
+                            <input type="hidden" name="grupo_id" id="edit_grupo_id_real">
+                            <input type="hidden" name="horarios_json" id="edit-horarios-json">
+
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="edit_profesor" class="form-label">Profesor</label>
+                                    <select class="form-select" id="edit_profesor" name="profesor_id">
+                                        <option value="">--- Seleccione Profesor (Opcional) ---</option>
+                                        {% for p in profesores %}
+                                        <option value="{{ p.perfil.id }}">{{ p.perfil.nombre }} ({{ p.perfil.id }})</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="edit_capacidad" class="form-label">Capacidad de Alumnos</label>
+                                    <input type="number" class="form-control" id="edit_capacidad" name="capacidad" min="1" required>
+                                </div>
+                            </div>
+
+                            <h6 class="mt-4">Horarios</h6>
+                            <div id="horarios-container-editar" class="mb-3 border p-3 rounded">
+                                <!-- Aquí se cargan los bloques de horario existentes por JS -->
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary mb-3" onclick="agregarHorario('editar')">
+                                <i class="bi bi-clock-history"></i> Agregar Bloque Horario
+                            </button>
+                            
+                            <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                                <button type="button" class="btn btn-danger" onclick="eliminarGrupoSeleccionado()">
+                                    <i class="bi bi-trash"></i> Eliminar Grupo
+                                </button>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-save"></i> Guardar Cambios
+                                </button>
+                            </div>
+                        </form>
+
+                        <!-- Formulario de Eliminación de Grupo (Oculto) -->
+                        <form method="POST" id="form_eliminar_grupo" style="display:none;">
+                            {% csrf_token %}
+                            <input type="hidden" name="accion" value="eliminar_grupo">
+                            <input type="hidden" name="grupo_id" id="delete_grupo_id">
+                        </form>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- JAVASCRIPT -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <script>
+        // Variables globales para el manejo de horarios
+        let horariosTempCrear = [];
+        let horariosTempEditar = [];
+        const AULAS = [
+            {% for a in aulas %}
+            { id: '{{ a.id }}', nombre: '{{ a.id }}' },
+            {% endfor %}
+        ];
+        
+        // ======================================================================
+        // LÓGICA DE GESTIÓN DE CURSO (Modal Editar)
+        // ======================================================================
+
+        function updateNotasFaseField(name, url, fileLabel) {
+            const container = document.getElementById(`file-container-${name}`);
+            const deleteFieldId = `check_eliminar_${name}`;
+            
+            container.innerHTML = '';
+            
+            if (url && url !== 'None' && url !== '') {
+                container.innerHTML = `
+                    <div class="file-link-section bg-light-subtle p-2 rounded w-100 d-flex align-items-center">
+                        <span class="text-success me-2"><i class="bi bi-check-circle"></i> Cargado</span>
+                        <a href="${url}" target="_blank" class="btn btn-sm btn-outline-success me-2">
+                            <i class="bi bi-eye"></i> Ver
+                        </a>
+                        <button type="button" class="btn btn-sm btn-danger btn-eliminar-nota-fase" 
+                            data-field-id="${deleteFieldId}" data-container-id="file-container-${name}">
+                            <i class="bi bi-trash"></i> Eliminar
+                        </button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="file-link-section bg-light-subtle p-2 rounded w-100">
+                        <span class="text-muted fst-italic"><i class="bi bi-dash-circle"></i> No hay archivo cargado</span>
+                    </div>
+                `;
+            }
+        }
+
+        function updateSilaboField(url) {
+            const container = document.getElementById('file-container-silabo');
+            
+            container.innerHTML = '';
+            
+            if (url && url !== 'None' && url !== '') {
+                container.innerHTML = `
+                    <div class="file-link-section bg-light-subtle p-2 rounded w-100 d-flex align-items-center flex-wrap">
+                        <a href="${url}" target="_blank" class="text-decoration-underline me-3 text-truncate">
+                            <i class="bi bi-file-earmark-pdf"></i> Ver Sílabo Cargado
+                        </a>
+                        <div class="form-check me-3">
+                            <input class="form-check-input" type="checkbox" value="1" id="eliminar_silabo" name="eliminar_silabo">
+                            <label class="form-check-label text-danger small" for="eliminar_silabo">Eliminar</label>
+                        </div>
+                        <div class="mt-2 w-100">
+                            <label class="form-label small">Reemplazar archivo:</label>
+                            <input type="file" class="form-control form-control-sm" name="silabo" accept=".pdf">
+                        </div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <input type="file" class="form-control" name="silabo" accept=".pdf">
+                    <div class="form-text">Subir archivo PDF del sílabo</div>
+                `;
+            }
+        }
+
+        // Manejar eventos de eliminación de notas de fase
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('btn-eliminar-nota-fase') || 
+                e.target.closest('.btn-eliminar-nota-fase')) {
+                
+                const button = e.target.classList.contains('btn-eliminar-nota-fase') 
+                    ? e.target 
+                    : e.target.closest('.btn-eliminar-nota-fase');
+                
+                const fieldId = button.getAttribute('data-field-id');
+                const containerId = button.getAttribute('data-container-id');
+                
+                if (confirm("¿Está seguro que desea marcar este archivo de notas de fase para su eliminación? Los cambios se aplicarán al guardar el curso.")) {
+                    const deleteField = document.getElementById(fieldId);
+                    if (deleteField) {
+                        deleteField.value = '1';
+                        
+                        button.innerHTML = '<i class="bi bi-check-lg"></i> Marcado para eliminar';
+                        button.classList.remove('btn-danger');
+                        button.classList.add('btn-warning');
+                        button.disabled = true;
+                        
+                        const container = document.getElementById(containerId);
+                        if (container) {
+                            const successSpan = container.querySelector('.text-success');
+                            if (successSpan) {
+                                successSpan.textContent = ' Pendiente de eliminar';
+                                successSpan.classList.remove('text-success');
+                                successSpan.classList.add('text-warning');
+                                successSpan.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Pendiente de eliminar';
+                            }
+                            
+                            const viewLink = container.querySelector('a.btn-outline-success');
+                            if (viewLink) {
+                                viewLink.style.display = 'none';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            var modalEditarCurso = document.getElementById('modalEditarCurso');
+            modalEditarCurso.addEventListener('show.bs.modal', function (event) {
+                var button = event.relatedTarget; 
+                
+                var id = button.getAttribute('data-bs-id');
+                var nombre = button.getAttribute('data-bs-nombre');
+                var creditos = button.getAttribute('data-bs-creditos');
+                var ec1 = button.getAttribute('data-bs-ec1');
+                var ep1 = button.getAttribute('data-bs-ep1');
+                var ec2 = button.getAttribute('data-bs-ec2');
+                var ep2 = button.getAttribute('data-bs-ep2');
+                var ec3 = button.getAttribute('data-bs-ec3');
+                var ep3 = button.getAttribute('data-bs-ep3');
+                
+                var silabo_url = button.getAttribute('data-bs-silabo');
+                var f1a_url = button.getAttribute('data-bs-f1a');
+                var f1m_url = button.getAttribute('data-bs-f1m');
+                var f1b_url = button.getAttribute('data-bs-f1b');
+                var f2a_url = button.getAttribute('data-bs-f2a');
+                var f2m_url = button.getAttribute('data-bs-f2m');
+                var f2b_url = button.getAttribute('data-bs-f2b');
+                var f3a_url = button.getAttribute('data-bs-f3a');
+                var f3m_url = button.getAttribute('data-bs-f3m');
+                var f3b_url = button.getAttribute('data-bs-f3b');
+
+                document.getElementById('edit-curso-id-display').textContent = id;
+                document.getElementById('edit-id').value = id;
+                document.getElementById('edit-nombre').value = nombre;
+                document.getElementById('edit-creditos').value = creditos;
+                document.getElementById('edit-ec1').value = ec1;
+                document.getElementById('edit-ep1').value = ep1;
+                document.getElementById('edit-ec2').value = ec2;
+                document.getElementById('edit-ep2').value = ep2;
+                document.getElementById('edit-ec3').value = ec3;
+                document.getElementById('edit-ep3').value = ep3;
+                
+                updateSilaboField(silabo_url);
+                
+                updateNotasFaseField('fase1alta', f1a_url, 'Fase 1 Nota Alta');
+                updateNotasFaseField('fase1media', f1m_url, 'Fase 1 Nota Media');
+                updateNotasFaseField('fase1baja', f1b_url, 'Fase 1 Nota Baja');
+                
+                updateNotasFaseField('fase2alta', f2a_url, 'Fase 2 Nota Alta');
+                updateNotasFaseField('fase2media', f2m_url, 'Fase 2 Nota Media');
+                updateNotasFaseField('fase2baja', f2b_url, 'Fase 2 Nota Baja');
+                
+                updateNotasFaseField('fase3alta', f3a_url, 'Fase 3 Nota Alta');
+                updateNotasFaseField('fase3media', f3m_url, 'Fase 3 Nota Media');
+                updateNotasFaseField('fase3baja', f3b_url, 'Fase 3 Nota Baja');
+                
+                const deleteFields = [
+                    'check_eliminar_fase1alta', 'check_eliminar_fase1media', 'check_eliminar_fase1baja',
+                    'check_eliminar_fase2alta', 'check_eliminar_fase2media', 'check_eliminar_fase2baja',
+                    'check_eliminar_fase3alta', 'check_eliminar_fase3media', 'check_eliminar_fase3baja'
+                ];
+                
+                deleteFields.forEach(fieldId => {
+                    const field = document.getElementById(fieldId);
+                    if (field) {
+                        field.value = '0';
+                    }
+                });
+            });
+        });
+        
+        function confirmarEliminarCurso(cursoId) {
+            if (confirm(`¿Está seguro que desea eliminar el curso con ID ${cursoId}? Esto eliminará también todos los grupos asociados.`)) {
+                document.getElementById('delete-curso-id').value = cursoId;
+                document.getElementById('formEliminarCurso').submit();
+            }
+        }
+
+        // ======================================================================
+        // LÓGICA DE GESTIÓN DE GRUPO - CORREGIDA
+        // ======================================================================
+
+        var modalCrearGrupoTeoria = document.getElementById('modalCrearGrupoTeoria');
+        modalCrearGrupoTeoria.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget; 
+            var cursoId = button.getAttribute('data-bs-cursoid');
+            var cursoNombre = button.getAttribute('data-bs-cursonombre');
+            
+            document.getElementById('create-grupo-curso-id').value = cursoId;
+            document.getElementById('create-grupo-curso-nombre-display').textContent = cursoNombre;
+            
+            // Resetear y limpiar horarios para Crear
+            horariosTempCrear = [];
+            renderHorarios('crear');
+        });
+
+        var modalGestionarGrupos = document.getElementById('modalGestionarGrupos');
+        modalGestionarGrupos.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget; 
+            var cursoId = button.getAttribute('data-bs-cursoid');
+            
+            document.getElementById('gestion-curso-nombre').textContent = `Cargando grupos para ${cursoId}...`;
+            document.getElementById('form_edicion_grupo').style.display = 'none';
+            document.getElementById('select-grupo').innerHTML = '<option value="">--- Seleccione un Grupo ---</option>';
+
+            fetch(`?accion=obtener_grupos_curso&curso_id=${cursoId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                let select = document.getElementById('select-grupo');
+                select.innerHTML = '<option value="">--- Seleccione un Grupo ---</option>';
+                resp.grupos.forEach(g => {
+                    select.innerHTML += `<option value="${g.id}">${g.grupo} (ID: ${g.id})</option>`;
+                });
+                document.getElementById('gestion-curso-nombre').textContent = `Curso: ${cursoId}`;
+            })
+            .catch(error => {
+                console.error('Error al cargar grupos:', error);
+                alert('Ocurrió un error al cargar la lista de grupos.');
+            });
+        });
+
+        function getHorariosTemp(mode) {
+            return mode === 'crear' ? horariosTempCrear : horariosTempEditar;
+        }
+
+        function setHorariosTemp(mode, value) {
+            if (mode === 'crear') {
+                horariosTempCrear = value;
+            } else {
+                horariosTempEditar = value;
+            }
+        }
+
+        // Función para convertir hora a formato HH:MM para input time
+        function formatTimeForInput(timeString) {
+            if (!timeString) return '';
+            // Si ya está en formato HH:MM, devolverlo tal cual
+            if (timeString.length === 5) return timeString;
+            // Si está en formato HH:MM:SS, quitar los segundos
+            if (timeString.length === 8) return timeString.substring(0, 5);
+            return timeString;
+        }
+
+        // Función para normalizar hora a formato HH:MM:SS para backend
+        function normalizeTimeForBackend(timeString) {
+            if (!timeString) return '';
+            // Si ya está en formato HH:MM:SS, devolverlo tal cual
+            if (timeString.length === 8) return timeString;
+            // Si está en formato HH:MM, agregar segundos
+            if (timeString.length === 5) return timeString + ':00';
+            return timeString;
+        }
+
+        function generarBloqueHorarioHTML(horario, index, mode) {
+            const horariosTemp = getHorariosTemp(mode);
+            
+            // Formatear horas para input time (HH:MM)
+            const inicioValue = formatTimeForInput(horario.inicio);
+            const finValue = formatTimeForInput(horario.fin);
+            const aulaOptions = AULAS.map(a => 
+                `<option value="${a.id}" ${horario.aula_id == a.id ? 'selected' : ''}>${a.nombre}</option>`
+            ).join('');
+
+            return `
+                <div class="row mb-2 border-bottom pb-2" data-index="${index}">
+                    <div class="col-md-3">
+                        <select class="form-select form-select-sm" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'dia', this.value)">
+                            <option value="">Día</option>
+                            <option value="LUNES" ${horario.dia === 'LUNES' ? 'selected' : ''}>Lunes</option>
+                            <option value="MARTES" ${horario.dia === 'MARTES' ? 'selected' : ''}>Martes</option>
+                            <option value="MIERCOLES" ${horario.dia === 'MIERCOLES' ? 'selected' : ''}>Miércoles</option>
+                            <option value="JUEVES" ${horario.dia === 'JUEVES' ? 'selected' : ''}>Jueves</option>
+                            <option value="VIERNES" ${horario.dia === 'VIERNES' ? 'selected' : ''}>Viernes</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <input type="time" class="form-control form-control-sm" value="${inicioValue}" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'inicio', this.value)">
+                    </div>
+                    <div class="col-md-3">
+                        <input type="time" class="form-control form-control-sm" value="${finValue}" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'fin', this.value)">
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" required onchange="actualizarHorarioTemp('${mode}', ${index}, 'aula_id', this.value)">
+                            <option value="">Aula</option>
+                            ${aulaOptions}
+                        </select>
+                    </div>
+                    <div class="col-md-1 text-end">
+                        <button type="button" class="btn btn-danger btn-sm" onclick="eliminarHorario(${index}, '${mode}')">✕</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function renderHorarios(mode) {
+            const container = document.getElementById(`horarios-container-${mode}`);
+            const horariosTemp = getHorariosTemp(mode);
+            const jsonField = document.getElementById(`${mode}-horarios-json`);
+            
+            container.innerHTML = '';
+            
+            if (horariosTemp.length === 0) {
+                container.innerHTML = '<div class="text-muted text-center py-3">No hay horarios agregados. Agregue al menos un bloque.</div>';
+            } else {
+                horariosTemp.forEach((horario, index) => {
+                    container.innerHTML += generarBloqueHorarioHTML(horario, index, mode);
+                });
+            }
+
+            // Actualizar el campo JSON oculto del formulario
+            if (jsonField) {
+                // Asegurar que las horas estén normalizadas antes de enviar
+                const horariosParaEnviar = horariosTemp.map(h => ({
+                    ...h,
+                    inicio: normalizeTimeForBackend(h.inicio),
+                    fin: normalizeTimeForBackend(h.fin)
+                }));
+                jsonField.value = JSON.stringify(horariosParaEnviar);
+                console.log(`Horarios (${mode}) enviados:`, jsonField.value); // Para depuración
+            }
+        }
+        
+        function agregarHorario(mode) {
+            const horariosTemp = getHorariosTemp(mode);
+            horariosTemp.push({ dia: '', inicio: '', fin: '', aula_id: '' });
+            setHorariosTemp(mode, horariosTemp);
+            renderHorarios(mode);
+        }
+
+        function actualizarHorarioTemp(mode, index, key, value) {
+            const horariosTemp = getHorariosTemp(mode);
+            
+            if (index >= 0 && index < horariosTemp.length) {
+                if (key === 'inicio' || key === 'fin') {
+                    // Normalizar la hora inmediatamente para mantener formato consistente
+                    horariosTemp[index][key] = normalizeTimeForBackend(value);
+                } else {
+                    horariosTemp[index][key] = value;
+                }
+            }
+            
+            setHorariosTemp(mode, horariosTemp);
+            // No llamamos a renderHorarios aquí para evitar recargar constantemente
+            // Solo actualizamos el campo JSON
+            const jsonField = document.getElementById(`${mode}-horarios-json`);
+            if (jsonField) {
+                const horariosParaEnviar = horariosTemp.map(h => ({
+                    ...h,
+                    inicio: normalizeTimeForBackend(h.inicio),
+                    fin: normalizeTimeForBackend(h.fin)
+                }));
+                jsonField.value = JSON.stringify(horariosParaEnviar);
+            }
+        }
+
+        function eliminarHorario(index, mode) {
+            if (confirm("¿Seguro que desea eliminar este bloque de horario?")) {
+                const horariosTemp = getHorariosTemp(mode);
+                horariosTemp.splice(index, 1);
+                setHorariosTemp(mode, horariosTemp);
+                renderHorarios(mode);
+            }
+        }
+
+        function cargarDetalleGrupo() {
+            const grupoId = document.getElementById('select-grupo').value;
+
+            if(!grupoId) {
+                document.getElementById('form_edicion_grupo').style.display = 'none';
+                return;
+            }
+
+            fetch(`?accion=obtener_detalle_grupo&grupo_id=${grupoId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                if(resp.ok) {
+                    let d = resp.data;
+                    document.getElementById('edit_grupo_id_real').value = d.id;
+                    document.getElementById('delete_grupo_id').value = d.id;
+                    document.getElementById('edit_profesor').value = d.profesor_id;
+                    document.getElementById('edit_capacidad').value = d.capacidad;
+                    
+                    // Asegurar que los horarios tengan formato correcto
+                    if (d.horarios && Array.isArray(d.horarios)) {
+                        // Normalizar las horas que vienen del backend
+                        d.horarios = d.horarios.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                    }
+                    
+                    horariosTempEditar = d.horarios || []; 
+                    renderHorarios('editar');
+
+                    document.getElementById('form_edicion_grupo').style.display = 'block';
+                } else {
+                    alert(resp.msg);
+                }
+            })
+            .catch(error => {
+                console.error('Error al cargar detalle del grupo:', error);
+                alert('Error al cargar el detalle del grupo.');
+            });
+        }
+
+        function eliminarGrupoSeleccionado() {
+            if(confirm("¿Seguro que desea eliminar este grupo y todos sus horarios asociados? Esta acción no se puede deshacer.")) {
+                document.getElementById('form_eliminar_grupo').submit();
+            }
+        }
+
+        // Validar el formulario antes de enviar
+        document.addEventListener('DOMContentLoaded', function() {
+            const formCrearGrupo = document.getElementById('formCrearGrupoTeoria');
+            const formEditarGrupo = document.getElementById('formEditarGrupoTeoria');
+            
+            if (formCrearGrupo) {
+                formCrearGrupo.addEventListener('submit', function(e) {
+                    // Validar letra del grupo
+                    const letraGrupo = document.getElementById('create-grupo-letra').value;
+                    if (!letraGrupo || letraGrupo.length !== 1 || !/^[A-Z]$/.test(letraGrupo)) {
+                        e.preventDefault();
+                        alert('La letra del grupo debe ser una sola letra mayúscula (A-Z)');
+                        return;
+                    }
+                    
+                    // Verificar que haya horarios
+                    if (horariosTempCrear.length === 0) {
+                        e.preventDefault();
+                        alert('Debe agregar al menos un bloque de horario');
+                        return;
+                    }
+                    
+                    // Verificar que todos los horarios estén completos
+                    for (let i = 0; i < horariosTempCrear.length; i++) {
+                        const horario = horariosTempCrear[i];
+                        if (!horario.dia || !horario.inicio || !horario.fin || !horario.aula_id) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} está incompleto. Por favor complete todos los campos.`);
+                            return;
+                        }
+                        
+                        // Validar formato de hora
+                        if (!/^\d{2}:\d{2}:\d{2}$/.test(horario.inicio) || !/^\d{2}:\d{2}:\d{2}$/.test(horario.fin)) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} tiene formato de hora inválido. Debe ser HH:MM:SS`);
+                            return;
+                        }
+                    }
+                    
+                    // Forzar actualización del campo JSON antes de enviar
+                    const jsonField = document.getElementById('create-horarios-json');
+                    if (jsonField) {
+                        // Asegurar formato final
+                        const horariosParaEnviar = horariosTempCrear.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                        jsonField.value = JSON.stringify(horariosParaEnviar);
+                        console.log('JSON enviado (crear):', jsonField.value);
+                    }
+                });
+            }
+            
+            if (formEditarGrupo) {
+                formEditarGrupo.addEventListener('submit', function(e) {
+                    // Verificar que haya horarios
+                    if (horariosTempEditar.length === 0) {
+                        e.preventDefault();
+                        alert('Debe haber al menos un bloque de horario');
+                        return;
+                    }
+                    
+                    // Verificar que todos los horarios estén completos
+                    for (let i = 0; i < horariosTempEditar.length; i++) {
+                        const horario = horariosTempEditar[i];
+                        if (!horario.dia || !horario.inicio || !horario.fin || !horario.aula_id) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} está incompleto. Por favor complete todos los campos.`);
+                            return;
+                        }
+                        
+                        // Validar formato de hora
+                        if (!/^\d{2}:\d{2}:\d{2}$/.test(horario.inicio) || !/^\d{2}:\d{2}:\d{2}$/.test(horario.fin)) {
+                            e.preventDefault();
+                            alert(`El horario ${i + 1} tiene formato de hora inválido. Debe ser HH:MM:SS`);
+                            return;
+                        }
+                    }
+                    
+                    // Forzar actualización del campo JSON antes de enviar
+                    const jsonField = document.getElementById('edit-horarios-json');
+                    if (jsonField) {
+                        // Asegurar formato final
+                        const horariosParaEnviar = horariosTempEditar.map(h => ({
+                            ...h,
+                            inicio: normalizeTimeForBackend(h.inicio),
+                            fin: normalizeTimeForBackend(h.fin)
+                        }));
+                        jsonField.value = JSON.stringify(horariosParaEnviar);
+                        console.log('JSON enviado (editar):', jsonField.value);
+                    }
+                });
+            }
+        });
+
+    </script>
+
+{% endblock content %}

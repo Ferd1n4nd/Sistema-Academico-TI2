@@ -1,0 +1,834 @@
+{% extends "usuarios/admin/base_admin.html" %}
+{% load custom_filters %}
+
+{% block content %}
+    <style>
+        /* Variables de colores sutiles y fondo libre */
+        :root {
+            /* Colores de texto oscuro para fondos claros (subtle) */
+            --bs-primary-text-dark: #002752; 
+            --bs-success-text-dark: #07380f;
+            --bs-info-text-dark: #00334f;
+            --bs-warning-text-dark: #493700;
+            --bs-danger-text-dark: #490000;
+            /* Fondo de celdas libres ligeramente grisáceo */
+            --color-free-cell: #fcfcfc; 
+            /* Color específico para reservas */
+            --color-reserva: #6c757d;
+        }
+
+        /* Estilos personalizados para el horario tipo Calendar con diseño suave y COMPACTO */
+        .horario-calendar {
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #e0e0e0;
+            /* Sombra sutil */
+            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        
+        /* Bordes internos muy sutiles */
+        .horario-calendar th, .horario-calendar td {
+            border-color: #f5f5f5 !important; 
+            padding: 0;
+            vertical-align: top; /* Aseguramos que el contenido empiece arriba */
+            height: 75px; /* Ligeramente más alto para mostrar más info */
+        }
+        
+        /* Cabecera de la tabla */
+        .horario-calendar thead th {
+            background-color: #3f51b5; 
+            color: white;
+            padding: 8px 5px; 
+            font-weight: 600;
+            border-bottom: none !important;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+        }
+        
+        /* Columna de la hora (Estilo time-column) */
+        .time-column {
+            background-color: #f8f9fa;
+            font-size: 0.75rem; 
+            font-weight: 600;
+            color: #5a5a5a;
+            padding: 10px 5px !important; 
+            width: 10%;
+            border-right: 2px solid #e0e0e0 !important;
+            vertical-align: middle !important;
+        }
+
+        /* Bloque de clase (donde hay curso) */
+        .class-block-container {
+            min-height: 75px; 
+            padding: 0;
+            cursor: pointer; 
+            transition: background-color 0.3s;
+        }
+        
+        .class-block {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start; 
+            text-align: left;
+            padding: 5px 8px !important; /* Padding interno reducido */
+            border-left: 4px solid; 
+            min-height: 75px;
+            height: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+            line-height: 1.1; /* Línea de texto más compacta */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            color: var(--bs-body-color) !important; 
+        }
+
+        .class-block:hover {
+            transform: translateY(-1px); 
+            box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+        
+        /* 1. Nombre del Curso (principal) */
+        .class-block .course-name {
+            font-size: 0.85rem; 
+            font-weight: 600;
+            margin-bottom: 0px; 
+            display: block;
+            line-height: 1.1;
+            white-space: normal; /* PERMITE ENVOLVER para que se vea completo */
+            overflow: hidden; 
+            text-overflow: ellipsis;
+            color: inherit !important; 
+        }
+
+        /* 2. Código de Grupo y Tipo (secundario) */
+        .class-block .code-and-type {
+            font-size: 0.7rem; 
+            font-weight: 500;
+            margin-top: 2px;
+            margin-bottom: 2px;
+            color: #4a4a4a !important; 
+            line-height: 1.1;
+        }
+
+        /* 3. Aula (detalle) */
+        .class-block .location-detail {
+            font-size: 0.65rem; 
+            font-weight: 500;
+            color: #6c757d !important; 
+            display: flex;
+            align-items: center;
+            line-height: 1;
+        }
+
+        /* 4. Profesor (nuevo) */
+        .class-block .profesor-info {
+            font-size: 0.65rem; 
+            font-weight: 500;
+            color: #5a5a5a !important; 
+            display: flex;
+            align-items: center;
+            margin-top: 1px;
+            line-height: 1;
+        }
+        
+        /* Celda libre: cambiamos el fondo blanco puro */
+        td.free-cell {
+            background-color: var(--color-free-cell) !important;
+            border-right: 1px solid #eee !important;
+            height: 75px; 
+        }
+        .free-cell .h-100 {
+            color: #bbb;
+        }
+        
+        /* ---------------------------------------------------- */
+        /* REGLAS DE COLOR DINÁMICAS (Usando colores subtle)    */
+        /* ---------------------------------------------------- */
+        
+        /* Aplicamos el color de fondo SUAVE y el color del borde IZQUIERDO al DIV interno */
+        .bg-primary { 
+            border-left-color: var(--bs-primary) !important; 
+            background-color: var(--bs-primary-bg-subtle) !important;
+            color: var(--bs-primary-text-dark) !important; 
+        }
+        .bg-success { 
+            border-left-color: var(--bs-success) !important; 
+            background-color: var(--bs-success-bg-subtle) !important; 
+            color: var(--bs-success-text-dark) !important; 
+        }
+        .bg-info { 
+            border-left-color: var(--bs-info) !important; 
+            background-color: var(--bs-info-bg-subtle) !important; 
+            color: var(--bs-info-text-dark) !important; 
+        }
+        .bg-warning { 
+            border-left-color: var(--bs-warning) !important; 
+            background-color: var(--bs-warning-bg-subtle) !important; 
+            color: var(--bs-warning-text-dark) !important; 
+        }
+        .bg-danger { 
+            border-left-color: var(--bs-danger) !important; 
+            background-color: var(--bs-danger-bg-subtle) !important; 
+            color: var(--bs-danger-text-dark) !important; 
+        }
+        .bg-secondary { 
+            border-left-color: var(--bs-secondary) !important; 
+            background-color: var(--bs-secondary-bg-subtle) !important; 
+            color: var(--bs-secondary-text-dark) !important; 
+        }
+        
+        /* Estilo especial para RESERVAS */
+        .reserva-block {
+            border-left-color: #6c757d !important;
+            background-color: #f8f9fa !important;
+            color: #2a2a2a !important;
+            border-left-style: dashed !important;
+        }
+        
+        /* Selector de aula */
+        .aula-selector {
+            max-width: 300px;
+            border-radius: 8px;
+            border: 1px solid #ced4da;
+            transition: all 0.3s;
+        }
+        .aula-selector:focus {
+            border-color: #3f51b5;
+            box-shadow: 0 0 0 0.2rem rgba(63, 81, 181, 0.25);
+        }
+        
+        /* Info del aula seleccionada */
+        .aula-info-card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 18px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e9ecef;
+            border-left: 5px solid #3f51b5;
+        }
+        
+        /* Leyenda */
+        .legend-color-key {
+            border-radius: 6px;
+            font-size: 0.85rem; 
+            padding: 6px 12px;
+            font-weight: 500;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            color: #333;
+            transition: transform 0.2s;
+            display: inline-flex;
+            align-items: center;
+        }
+        .legend-color-key:hover {
+            transform: translateY(-1px);
+        }
+        .legend-badge {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            margin-right: 6px;
+            display: inline-block;
+        }
+
+        /* Badge para tipo */
+        .tipo-badge {
+            font-size: 0.6rem;
+            padding: 1px 4px;
+            border-radius: 3px;
+            margin-left: 4px;
+            font-weight: bold;
+        }
+        .badge-teoria {
+            background-color: #0d6efd;
+            color: white;
+        }
+        .badge-lab {
+            background-color: #198754;
+            color: white;
+        }
+        .badge-reserva {
+            background-color: #6c757d;
+            color: white;
+        }
+
+    </style>
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h4 class="text-dark fw-bold mb-0">📅 Visualización de Horarios por Aula</h4>
+        <div class="d-flex align-items-center">
+            <span class="me-3 text-muted">Semana actual</span>
+            <div class="badge bg-primary">{{ semana_actual|date:"d/m/Y" }}</div>
+        </div>
+    </div>
+    
+    <!-- Selector de Aula -->
+    <div class="card mb-4 border-0 shadow-sm">
+        <div class="card-body">
+            <h5 class="card-title fw-bold text-secondary mb-3">Seleccionar Aula</h5>
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <label for="select-aula" class="form-label fw-medium">Seleccione un aula para ver su horario:</label>
+                    <select class="form-select aula-selector py-2" id="select-aula">
+                        <option value="">--- Seleccione un Aula ---</option>
+                        {% for aula in aulas %}
+                            <option value="{{ aula.id }}">{{ aula.id }} - {{ aula.get_tipo_display }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <div id="aula-info" class="aula-info-card" style="display: none;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-1 fw-bold text-dark" id="aula-nombre">Aula</h6>
+                                <p class="mb-0 small text-muted" id="aula-tipo">Tipo</p>
+                            </div>
+                            <div>
+                                <button id="btn-exportar-pdf" class="btn btn-outline-primary btn-sm" style="display: none;">
+                                    <i class="bi bi-file-earmark-pdf me-1"></i> Exportar PDF
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Horario -->
+    <div class="card p-4 border-0 bg-white horario-calendar">
+        
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="card-title fw-bold text-secondary mb-0">Horario Semanal del Aula</h5>
+            <div class="text-muted small" id="info-carga">
+                Seleccione un aula para cargar el horario
+            </div>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table table-fixed text-center align-middle mb-0" style="min-width: 900px;" id="tabla-horario">
+                <thead class="table-dark sticky-top">
+                    <tr>
+                        <th class="time-column" style="width: 10%;">Hora</th>
+                        {% for dia in dias %}
+                            <th>{{ dia }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody id="cuerpo-horario">
+                    {# Itera sobre las horas generadas dinámicamente #}
+                    {% for hora_index, hora_rango in horas|enumerate %}
+                        <tr>
+                            {# Columna de la Hora #}
+                            <td class="time-column">{{ hora_rango }}</td>
+                            
+                            {# Itera sobre cada día #}
+                            {% for dia_index, dia_nombre in dias|enumerate %} 
+                                {# Celda vacía inicialmente #}
+                                <td class="free-cell text-muted p-0">
+                                    <div class="d-flex align-items-center justify-content-center h-100 small">---</div>
+                                </td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <hr class="mt-5">
+        
+        {# --- Leyenda --- #}
+        <div class="row mt-4">
+            <div class="col-md-8">
+                <h5 class="card-title fw-bold text-secondary mb-3">Leyenda</h5>
+                <div class="d-flex flex-wrap gap-3" id="leyenda-cursos">
+                    <div class="text-muted">Seleccione un aula para ver la leyenda de cursos</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <h5 class="card-title fw-bold text-secondary mb-3">Tipos de Actividad</h5>
+                <div class="d-flex flex-column gap-2">
+                    <div class="d-flex align-items-center">
+                        <span class="legend-badge bg-primary"></span>
+                        <span class="ms-2 small">Teoría (TEO)</span>
+                        <span class="tipo-badge badge-teoria ms-auto">TEO</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span class="legend-badge bg-success"></span>
+                        <span class="ms-2 small">Laboratorio (LAB)</span>
+                        <span class="tipo-badge badge-lab ms-auto">LAB</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span class="legend-badge bg-secondary"></span>
+                        <span class="ms-2 small">Reserva (RES)</span>
+                        <span class="tipo-badge badge-reserva ms-auto">RES</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+    </div>
+
+    <!-- Modal para detalles -->
+    <div class="modal fade" id="modalDetallesClase" tabindex="-1" aria-labelledby="modalDetallesClaseLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalDetallesClaseLabel">Detalles de la Actividad</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="modal-detalles-content">
+                    <!-- Contenido cargado dinámicamente -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <!-- JAVASCRIPT -->
+    <!-- ------------------------------------------------------------------------------------------------------------------------------------------------------------------ -->
+    <script>
+        // Función para cargar horario de un aula específica
+        window.cargarHorarioAula = function() {
+            const aulaId = document.getElementById('select-aula').value;
+            
+            if (!aulaId) {
+                document.getElementById('info-carga').textContent = 'Seleccione un aula para cargar el horario';
+                document.getElementById('aula-info').style.display = 'none';
+                resetHorario();
+                return;
+            }
+            
+            // Mostrar loading
+            document.getElementById('info-carga').innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Cargando horario...';
+            document.getElementById('leyenda-cursos').innerHTML = '<div class="text-muted">Cargando...</div>';
+            
+            fetch(`?accion=obtener_horarios_aula&aula_id=${aulaId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                console.log('DEBUG - Respuesta completa:', resp);
+                console.log('DEBUG - Horas recibidas:', resp.horas);
+                console.log('DEBUG - Datos del horario:', resp.horario_data);
+                
+                if (resp.ok) {
+                    // Actualizar info del aula
+                    const aulaInfo = document.getElementById('aula-info');
+                    document.getElementById('aula-nombre').textContent = `Aula ${resp.aula.id}`;
+                    document.getElementById('aula-tipo').textContent = resp.aula.tipo === 'LABORATORIO' ? 'Laboratorio' : 'Aula Normal';
+                    aulaInfo.style.display = 'block';
+                    
+                    // Actualizar mensaje
+                    document.getElementById('info-carga').textContent = `Horario del Aula ${resp.aula.id} - Semana actual`;
+                    
+                    // Actualizar tabla de horario
+                    actualizarTablaHorario(resp.horas, resp.horario_data);
+                    
+                    // Actualizar leyenda
+                    actualizarLeyenda(resp.curso_colores);
+                    
+                } else {
+                    alert(resp.msg);
+                    document.getElementById('info-carga').textContent = 'Error al cargar el horario';
+                    resetHorario();
+                }
+            })
+            .catch(error => {
+                console.error('Error al cargar horario:', error);
+                alert('Error al cargar el horario del aula');
+                document.getElementById('info-carga').textContent = 'Error al cargar el horario';
+                resetHorario();
+            });
+        };
+        
+        function resetHorario(horasDefecto = null) {
+            const cuerpo = document.getElementById('cuerpo-horario');
+            cuerpo.innerHTML = '';
+            
+            // Usar horas por defecto si no se proporcionan
+            const horasUsar = horasDefecto || window.horasPorDefecto;
+            
+            if (!horasUsar || horasUsar.length === 0) {
+                // Crear horas por defecto si no existen
+                const horasDefault = [];
+                for (let i = 7; i < 21; i++) {
+                    const hora = i.toString().padStart(2, '0') + ':00';
+                    const horaSiguiente = (i + 1).toString().padStart(2, '0') + ':00';
+                    horasDefault.push(`${hora} - ${horaSiguiente}`);
+                }
+                
+                // Crear filas con horas por defecto
+                horasDefault.forEach((horaRango, i) => {
+                    const nuevaFila = document.createElement('tr');
+                    let filaHTML = `<td class="time-column">${horaRango}</td>`;
+                    
+                    for (let j = 0; j < 5; j++) { // 5 días
+                        filaHTML += `
+                            <td class="free-cell text-muted p-0">
+                                <div class="d-flex align-items-center justify-content-center h-100 small">---</div>
+                            </td>
+                        `;
+                    }
+                    
+                    nuevaFila.innerHTML = filaHTML;
+                    cuerpo.appendChild(nuevaFila);
+                });
+            } else {
+                // Crear filas con las horas proporcionadas
+                horasUsar.forEach((horaRango, i) => {
+                    const nuevaFila = document.createElement('tr');
+                    let filaHTML = `<td class="time-column">${horaRango}</td>`;
+                    
+                    for (let j = 0; j < 5; j++) { // 5 días
+                        filaHTML += `
+                            <td class="free-cell text-muted p-0">
+                                <div class="d-flex align-items-center justify-content-center h-100 small">---</div>
+                            </td>
+                        `;
+                    }
+                    
+                    nuevaFila.innerHTML = filaHTML;
+                    cuerpo.appendChild(nuevaFila);
+                });
+            }
+            
+            document.getElementById('leyenda-cursos').innerHTML = '<div class="text-muted">Seleccione un aula para ver la leyenda de cursos</div>';
+        }
+
+        function actualizarTablaHorario(horas, horarioData) {
+            console.log('DEBUG - actualizarTablaHorario:', {horas, horarioData});
+            
+            const cuerpo = document.getElementById('cuerpo-horario');
+            cuerpo.innerHTML = '';
+            
+            // Días de la semana
+            const dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES'];
+            
+            if (!horas || !Array.isArray(horas) || horas.length === 0) {
+                console.error('ERROR: horas no es un array válido:', horas);
+                resetHorario();
+                return;
+            }
+            
+            // Crear filas para cada hora DINÁMICA
+            horas.forEach((rangoHora, horaIndex) => {
+                const row = document.createElement('tr');
+                
+                // Celda de hora (ahora con rango, ej: "08:00 - 09:00")
+                row.innerHTML = `<td class="time-column">${rangoHora}</td>`;
+                
+                // Celdas para cada día
+                dias.forEach((dia, diaIndex) => {
+                    // Acceder a los datos
+                    const horaKey = horaIndex.toString();
+                    const diaKey = diaIndex.toString();
+                    const celda = horarioData && horarioData[horaKey] ? horarioData[horaKey][diaKey] : null;
+                    
+                    if (celda && typeof celda === 'object' && celda !== null) {
+                        // FILTRO: Si el color es bg-dark o similar oscuro, reemplazar
+                        let claseColor = celda.color || 'bg-secondary';
+                        
+                        // Reemplazar colores oscuros por alternativas más claras
+                        if (claseColor.includes('dark') || claseColor === 'bg-dark') {
+                            claseColor = 'bg-secondary'; // Alternativa más clara
+                        }
+                        
+                        // Añadir clase extra para reservas
+                        if (celda.es_reserva) {
+                            claseColor += ' reserva-block';
+                        }
+                        
+                        // Determinar badge de tipo
+                        let tipoBadge = '';
+                        if (celda.tipo === 'TEO') {
+                            tipoBadge = '<span class="tipo-badge badge-teoria">TEO</span>';
+                        } else if (celda.tipo === 'LAB') {
+                            tipoBadge = '<span class="tipo-badge badge-lab">LAB</span>';
+                        } else if (celda.tipo === 'RES') {
+                            tipoBadge = '<span class="tipo-badge badge-reserva">RES</span>';
+                        } else if (celda.tipo === 'CLS') {
+                            tipoBadge = '<span class="tipo-badge badge-secondary">CLS</span>';
+                        }
+                        
+                        // Asegurar que los datos existan
+                        const nombre = celda.nombre || 'Sin nombre';
+                        const codigoGrupo = celda.codigo_grupo || '---';
+                        const profesor = celda.profesor || 'Sin asignar';
+                        const horaInicio = celda.hora_inicio ? celda.hora_inicio.substring(0,5) : '--:--';
+                        const horaFin = celda.hora_fin ? celda.hora_fin.substring(0,5) : '--:--';
+                        
+                        // Escapar comillas simples para el JSON
+                        const celdaEscapada = JSON.stringify(celda).replace(/'/g, "&#39;");
+                        
+                        row.innerHTML += `
+                            <td class="class-block-container p-0">
+                                <div class="class-block ${claseColor}" 
+                                    onclick="mostrarDetalles(${horaIndex}, ${diaIndex}, '${celdaEscapada.replace(/"/g, '&quot;')}')">
+                                    
+                                    <div class="course-name">${nombre}</div>
+                                    
+                                    <small class="code-and-type">
+                                        ${codigoGrupo} ${tipoBadge}
+                                    </small>
+                                    
+                                    <div class="profesor-info">
+                                        <i class="bi bi-person-fill me-1"></i> ${profesor}
+                                    </div>
+                                    
+                                    <div class="location-detail">
+                                        <i class="bi bi-clock-fill me-1"></i> ${horaInicio} - ${horaFin}
+                                    </div>
+                                </div>
+                            </td>
+                        `;
+                    } else {
+                        row.innerHTML += `
+                            <td class="free-cell text-muted p-0">
+                                <div class="d-flex align-items-center justify-content-center h-100 small">Libre</div>
+                            </td>
+                        `;
+                    }
+                });
+                
+                cuerpo.appendChild(row);
+            });
+        }
+        
+        function actualizarLeyenda(cursoColores) {
+            const leyendaContainer = document.getElementById('leyenda-cursos');
+            leyendaContainer.innerHTML = '';
+            
+            if (!cursoColores || Object.keys(cursoColores).length === 0) {
+                leyendaContainer.innerHTML = '<div class="text-muted">No hay cursos asignados a este aula</div>';
+                return;
+            }
+            
+            Object.entries(cursoColores).forEach(([cursoId, colorClass]) => {
+                const colorSpan = document.createElement('span');
+                colorSpan.className = `legend-color-key ${colorClass}`;
+                colorSpan.innerHTML = `
+                    <span class="legend-badge ${colorClass}"></span>
+                    ${cursoId}
+                `;
+                leyendaContainer.appendChild(colorSpan);
+            });
+        }
+        
+        function mostrarDetalles(horaIndex, diaIndex, celdaDataJson) {
+            try {
+                // Parsear los datos directamente desde el parámetro
+                const celdaData = JSON.parse(celdaDataJson.replace(/&#39;/g, "'"));
+                console.log('Datos de la celda seleccionada:', celdaData);
+                
+                // Preparar contenido del modal
+                let contenido = '';
+                
+                if (celdaData.es_reserva) {
+                    contenido = `
+                        <h6 class="fw-bold text-secondary mb-3">📋 Información de Reserva</h6>
+                        <div class="mb-3">
+                            <p class="mb-1"><strong>Tipo:</strong> <span class="badge bg-secondary">RESERVA</span></p>
+                            <p class="mb-1"><strong>Fecha:</strong> ${celdaData.fecha || 'N/A'}</p>
+                            <p class="mb-1"><strong>Horario:</strong> ${celdaData.hora_inicio ? celdaData.hora_inicio.substring(0,5) : '--:--'} - ${celdaData.hora_fin ? celdaData.hora_fin.substring(0,5) : '--:--'}</p>
+                            <p class="mb-1"><strong>Aula:</strong> ${celdaData.aula_id || 'N/A'}</p>
+                            <p class="mb-1"><strong>Profesor:</strong> ${celdaData.profesor || 'No asignado'}</p>
+                        </div>
+                        <div class="alert alert-info mt-3">
+                            <i class="bi bi-info-circle me-2"></i>
+                            Esta es una reserva especial del aula, no una clase regular.
+                        </div>
+                    `;
+                } else {
+                    // Es una clase regular
+                    const tipoDisplay = celdaData.tipo === 'TEO' ? 'Teoría' : 
+                                    celdaData.tipo === 'LAB' ? 'Laboratorio' : 
+                                    celdaData.tipo === 'CLS' ? 'Clase' : 'Actividad';
+                    
+                    contenido = `
+                        <h6 class="fw-bold text-secondary mb-3">📚 Información de Clase</h6>
+                        <div class="mb-3">
+                            <p class="mb-1"><strong>Curso:</strong> ${celdaData.nombre || 'Sin nombre'}</p>
+                            <p class="mb-1"><strong>Código:</strong> ${celdaData.codigo_curso || 'N/A'}</p>
+                            <p class="mb-1"><strong>Grupo:</strong> ${celdaData.codigo_grupo || 'N/A'}</p>
+                            <p class="mb-1"><strong>Tipo:</strong> <span class="badge ${celdaData.tipo === 'TEO' ? 'bg-primary' : celdaData.tipo === 'LAB' ? 'bg-success' : 'bg-secondary'}">${tipoDisplay}</span></p>
+                            <p class="mb-1"><strong>Horario:</strong> ${celdaData.hora_inicio ? celdaData.hora_inicio.substring(0,5) : '--:--'} - ${celdaData.hora_fin ? celdaData.hora_fin.substring(0,5) : '--:--'}</p>
+                            <p class="mb-1"><strong>Aula:</strong> ${celdaData.aula_id || 'N/A'}</p>
+                            <p class="mb-1"><strong>Profesor:</strong> ${celdaData.profesor || 'No asignado'}</p>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('modal-detalles-content').innerHTML = contenido;
+                
+                // Cerrar modal si está abierto
+                const modalElement = document.getElementById('modalDetallesClase');
+                const modalExistente = bootstrap.Modal.getInstance(modalElement);
+                if (modalExistente) {
+                    modalExistente.hide();
+                }
+                
+                // Crear nueva instancia del modal
+                const modal = new bootstrap.Modal(modalElement);
+                modal.show();
+                
+            } catch (error) {
+                console.error('Error al parsear datos de la celda:', error);
+                document.getElementById('modal-detalles-content').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error al cargar los detalles: ${error.message}
+                    </div>
+                `;
+                const modal = new bootstrap.Modal(document.getElementById('modalDetallesClase'));
+                modal.show();
+            }
+        }
+        
+        // Configurar evento onchange para el select
+        document.addEventListener('DOMContentLoaded', function() {
+            const selectAula = document.getElementById('select-aula');
+            if (selectAula) {
+                selectAula.addEventListener('change', cargarHorarioAula);
+            }
+            
+            // Inicializar con horario vacío
+            resetHorario();
+        });
+
+        function exportarPDF() {
+            const aulaId = document.getElementById('select-aula').value;
+            
+            if (!aulaId) {
+                alert('Por favor, seleccione un aula primero.');
+                return;
+            }
+            
+            // Mostrar loading
+            const btnExportar = document.getElementById('btn-exportar-pdf');
+            const originalText = btnExportar.innerHTML;
+            btnExportar.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Generando PDF...';
+            btnExportar.disabled = true;
+            
+            // Hacer la petición para exportar PDF
+            fetch(`?accion=exportar_pdf&aula_id=${aulaId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(response => {
+                if (response.ok && response.headers.get('content-type') === 'application/pdf') {
+                    return response.blob();
+                } else {
+                    return response.json().then(data => {
+                        throw new Error(data.msg || 'Error al generar PDF');
+                    });
+                }
+            })
+            .then(blob => {
+                // Crear un enlace temporal para descargar el PDF
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                
+                // Nombre del archivo
+                const fecha = new Date().toISOString().split('T')[0];
+                a.download = `horario_aula_${aulaId}_${fecha}.pdf`;
+                
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            })
+            .catch(error => {
+                console.error('Error al exportar PDF:', error);
+                alert('Error al generar PDF: ' + error.message);
+            })
+            .finally(() => {
+                // Restaurar botón
+                btnExportar.innerHTML = originalText;
+                btnExportar.disabled = false;
+            });
+        }
+
+        // En la función cargarHorarioAula, muestra el botón de exportar cuando se carga un horario
+        window.cargarHorarioAula = function() {
+            const aulaId = document.getElementById('select-aula').value;
+            
+            if (!aulaId) {
+                document.getElementById('info-carga').textContent = 'Seleccione un aula para cargar el horario';
+                document.getElementById('aula-info').style.display = 'none';
+                document.getElementById('btn-exportar-pdf').style.display = 'none';
+                resetHorario();
+                return;
+            }
+            
+            // Mostrar loading
+            document.getElementById('info-carga').innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Cargando horario...';
+            document.getElementById('leyenda-cursos').innerHTML = '<div class="text-muted">Cargando...</div>';
+            
+            fetch(`?accion=obtener_horarios_aula&aula_id=${aulaId}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            })
+            .then(res => res.json())
+            .then(resp => {
+                if (resp.ok) {
+                    // Actualizar info del aula
+                    const aulaInfo = document.getElementById('aula-info');
+                    document.getElementById('aula-nombre').textContent = `Aula ${resp.aula.id}`;
+                    document.getElementById('aula-tipo').textContent = resp.aula.tipo === 'LABORATORIO' ? 'Laboratorio' : 'Aula Normal';
+                    aulaInfo.style.display = 'block';
+                    
+                    // Mostrar botón de exportar
+                    document.getElementById('btn-exportar-pdf').style.display = 'inline-block';
+                    
+                    // Actualizar mensaje
+                    document.getElementById('info-carga').textContent = `Horario del Aula ${resp.aula.id} - Semana actual`;
+                    
+                    // Actualizar tabla de horario
+                    actualizarTablaHorario(resp.horas, resp.horario_data);
+                    
+                    // Actualizar leyenda
+                    actualizarLeyenda(resp.curso_colores);
+                    
+                } else {
+                    alert(resp.msg);
+                    document.getElementById('info-carga').textContent = 'Error al cargar el horario';
+                    resetHorario();
+                }
+            })
+            .catch(error => {
+                console.error('Error al cargar horario:', error);
+                alert('Error al cargar el horario del aula');
+                document.getElementById('info-carga').textContent = 'Error al cargar el horario';
+                resetHorario();
+            });
+        };
+
+        // Configurar evento para el botón de exportar
+        document.addEventListener('DOMContentLoaded', function() {
+            const selectAula = document.getElementById('select-aula');
+            const btnExportar = document.getElementById('btn-exportar-pdf');
+            
+            if (selectAula) {
+                selectAula.addEventListener('change', cargarHorarioAula);
+            }
+            
+            if (btnExportar) {
+                btnExportar.addEventListener('click', exportarPDF);
+            }
+            
+            // Inicializar con horario vacío
+            resetHorario();
+        });
+
+        window.horasPorDefecto = [
+            '07:00 - 08:00', '08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00',
+            '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00',
+            '15:00 - 16:00', '16:00 - 17:00', '17:00 - 18:00', '18:00 - 19:00',
+            '19:00 - 20:00', '20:00 - 21:00'
+        ];
+
+    </script>
+    
+{% endblock content %}

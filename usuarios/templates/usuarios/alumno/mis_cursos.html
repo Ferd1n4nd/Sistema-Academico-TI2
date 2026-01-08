@@ -39,17 +39,31 @@
                             <td>
                                 {{ curso.profesor_lab }}
                             </td>
-                            <td class="text-center">
-                                <a href="{% url 'usuarios:mis_notas_alumno' %}?curso={{ curso.curso_id }}" class="btn btn-sm btn-info text-white me-3">Ver Notas</a>
-                                {% if curso.grupo_lab == 'N/A' %}
-                                    <a href="{% url 'usuarios:matricula_lab_alumno' %}" class="btn btn-sm btn-warning me-2">Asignar Lab</a>
-                                {% endif %}
-                                {% if curso.temas %}
-                                    <button class="btn btn-sm btn-dark me-0" type="button" data-bs-toggle="collapse" data-bs-target="#{{ curso.collapse_id }}" aria-expanded="false" aria-controls="{{ curso.collapse_id }}">Ver Temas</button>
-                                {% else %}
-                                    <button class="btn btn-sm btn-secondary me-0" disabled>Sin Temas</button>
-                                {% endif %}
-                            </td>
+                            <td class="text-center">
+                                <div class="d-flex flex-column gap-1 align-items-center">
+                                        <!-- Botón Ver Notas -->
+                                        <a href="{% url 'usuarios:mis_notas_alumno' %}?curso={{ curso.curso_id }}" class="btn btn-sm btn-info text-white w-100">Ver Notas</a>
+                                        
+                                        <!-- Botón Asignar Lab (solo si no tiene lab) -->
+                                        {% if curso.grupo_lab == 'N/A' %}
+                                        <a href="{% url 'usuarios:matricula_lab_alumno' %}" class="btn btn-sm btn-warning w-100">Matricular Lab</a>
+                                        {% endif %}
+                                        
+                                        <!-- Botón Ver Sílabo -->
+                                        {% if curso.tiene_silabo %}
+                                        <a href="{{ curso.silabo_url }}" class="btn btn-sm btn-success w-100" download>Ver Sílabo</a>
+                                        {% else %}
+                                        <button class="btn btn-sm btn-secondary w-100" disabled>Sin Sílabo</button>
+                                        {% endif %}
+                                        
+                                        <!-- Botón Ver Temas -->
+                                        {% if curso.temas %}
+                                        <button class="btn btn-sm btn-dark w-100" type="button" data-bs-toggle="collapse" data-bs-target="#{{ curso.collapse_id }}" aria-expanded="false" aria-controls="{{ curso.collapse_id }}">Ver Temas</button>
+                                        {% else %}
+                                        <button class="btn btn-sm btn-secondary w-100" disabled>Sin Temas</button>
+                                        {% endif %}
+                                </div>
+                            </td>
                         </tr>
 
                         <!-- Fila de detalles colapsable (TEMAS) -->

@@ -3,14 +3,8 @@
 
 {% block content %}
     <style>
-        /* Variables de colores sutiles y fondo libre */
+        /* Variables de colores sutiles y fondo libre - ELIMINADO COLORES OSCUROS */
         :root {
-            /* Colores de texto oscuro para fondos claros (subtle) */
-            --bs-primary-text-dark: #002752; 
-            --bs-success-text-dark: #07380f;
-            --bs-info-text-dark: #00334f;
-            --bs-warning-text-dark: #493700;
-            --bs-danger-text-dark: #490000;
             /* Fondo de celdas libres ligeramente grisáceo */
             --color-free-cell: #fcfcfc; 
         }
@@ -75,7 +69,7 @@
             transition: transform 0.2s, box-shadow 0.2s;
             line-height: 1.1; /* Línea de texto más compacta */
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            color: var(--bs-body-color) !important; 
+            /* ELIMINADO: color: var(--bs-body-color) !important; */
         }
 
         .class-block:hover {
@@ -94,7 +88,8 @@
             white-space: normal; /* PERMITE ENVOLVER para que se vea completo */
             overflow: hidden; 
             text-overflow: ellipsis;
-            color: inherit !important; 
+            /* ELIMINADO: color: inherit !important; */
+            color: #333 !important; /* Color de texto estándar */
         }
 
         /* 2. Código de Grupo y Tipo (secundario) */
@@ -128,34 +123,34 @@
         }
         
         /* ---------------------------------------------------- */
-        /* REGLAS DE COLOR DINÁMICAS (Usando colores subtle)    */
+        /* REGLAS DE COLOR DINÁMICAS (Colores sutiles)          */
         /* ---------------------------------------------------- */
         
         /* Aplicamos el color de fondo SUAVE y el color del borde IZQUIERDO al DIV interno */
         .bg-primary { 
             border-left-color: var(--bs-primary) !important; 
             background-color: var(--bs-primary-bg-subtle) !important;
-            color: var(--bs-primary-text-dark) !important; 
+            /* ELIMINADO: color: var(--bs-primary-text-dark) !important; */
         }
         .bg-success { 
             border-left-color: var(--bs-success) !important; 
             background-color: var(--bs-success-bg-subtle) !important; 
-            color: var(--bs-success-text-dark) !important; 
+            /* ELIMINADO: color: var(--bs-success-text-dark) !important; */
         }
         .bg-info { 
             border-left-color: var(--bs-info) !important; 
             background-color: var(--bs-info-bg-subtle) !important; 
-            color: var(--bs-info-text-dark) !important; 
+            /* ELIMINADO: color: var(--bs-info-text-dark) !important; */
         }
         .bg-warning { 
             border-left-color: var(--bs-warning) !important; 
             background-color: var(--bs-warning-bg-subtle) !important; 
-            color: var(--bs-warning-text-dark) !important; 
+            /* ELIMINADO: color: var(--bs-warning-text-dark) !important; */
         }
         .bg-danger { 
             border-left-color: var(--bs-danger) !important; 
             background-color: var(--bs-danger-bg-subtle) !important; 
-            color: var(--bs-danger-text-dark) !important; 
+            /* ELIMINADO: color: var(--bs-danger-text-dark) !important; */
         }
         
         /* Leyenda */
@@ -177,6 +172,16 @@
         .horario-calendar thead.table-dark th {
             background-color: #3f51b5; 
             color: white;
+        }
+
+        /* Estilos adicionales para asegurar que el texto no sea negro */
+        .class-block * {
+            color: #333 !important; /* Color de texto estándar para todo dentro del bloque */
+        }
+        
+        /* Asegurar que los íconos también sean visibles */
+        .class-block .location-detail i {
+            color: #6c757d !important;
         }
 
     </style>

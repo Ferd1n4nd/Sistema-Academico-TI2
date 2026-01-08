@@ -1,0 +1,67 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ titulo }} | UNSA - Admin</title>
+  <link rel="icon" href="{% static 'imgs/favicon1.jpg' %}" type="image/png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    /* Estilos comunes */
+    body { background-color: #f7f7fb; height: 100vh; }
+    .sidebar { background-color: #0b5030; /* Color Verde para distinguirla */ color: white; min-height: 100vh; width: 260px; position: fixed; top: 0; left: 0; padding: 1rem 0; }
+    .sidebar a { color: #ddd; text-decoration: none; display: block; padding: 10px 20px; font-size: 15px; }
+    .sidebar a:hover { background-color: #0c6a3b; color: #fff; }
+    .sidebar .logo { text-align: center; margin-bottom: 1.5rem; }
+    .sidebar .logo img { width: 60px; }
+    .content { margin-left: 260px; padding: 2rem; background-color: #f8f9fc; height: 100vh; }
+    .card-main { background-color: white; border-radius: 15px; box-shadow: 0px 2px 10px rgba(0,0,0,0.1); padding: 20px; }
+    .btn-primary { background-color: #0b5030; border: none; font-size: 14px; padding: 6px 10px; }
+    .btn-primary:hover { background-color: #0c6a3b; }
+    @media (max-width: 991px) { .sidebar { position: relative; width: 100%; min-height: auto; } .content { margin-left: 0; } }
+  </style>
+</head>
+<body>
+
+  <div class="sidebar d-flex flex-column">
+    <div class="logo">
+      <img src="{% static 'imgs/LOGO_UNSA.png' %}" alt="Logo UNSA" class="img-fluid" style="width:200px;">
+      <h6 class="mt-2">Universidad Nacional<br>de San Agustin</h6>
+    </div>
+    <nav>
+      <a href="{% url 'usuarios:dashboard_admin' %}"><i class="bi bi-house-door"></i> Inicio</a>
+      <a href="{% url 'usuarios:mi_cuenta_admin' %}"><i class="bi bi-person-gear"></i> Mi cuenta</a>
+      
+      <hr class="mx-3 my-2 text-white-50">
+      
+      <a href="{% url 'usuarios:gestion_cursos_admin' %}"><i class="bi bi-book"></i> Gestión de Cursos</a>
+      <a href="{% url 'usuarios:ver_horarios_clases_admin' %}"><i class="bi bi-calendar3"></i> Ver Horarios</a>
+      <a href="{% url 'usuarios:gestion_laboratorios_admin' %}"><i class="bi bi-tools"></i> Gestión de Labs</a>
+      
+      <hr class="mx-3 my-2 text-white-50">
+      
+      <a href="{% url 'usuarios:registro_estudiantes_admin' %}"><i class="bi bi-people"></i> Gestión de Estudiantes</a>
+      <a href="{% url 'usuarios:registro_profesores_admin' %}"><i class="bi bi-briefcase"></i> Gestión de Profesores</a>
+      <a href="{% url 'usuarios:registro_secretarias' %}"><i class="bi bi-briefcase"></i> Gestión de Secretarias</a>
+
+      <a href="{% url 'usuarios:logout' %}"><i class="bi bi-box-arrow-right"></i> Cerrar Sesión</a>
+    </nav>
+  </div>
+
+  <div class="content">
+    <div class="card-main">
+      {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}info{% endif %}" role="alert">{{ message }}</div>
+      {% endfor %}
+
+      {% block content %}
+      {% endblock content %}
+      
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
